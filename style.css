@@ -161,7 +161,16 @@ h1 { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.5px; line-height: 
 .card.glow { border-color: var(--border-accent); box-shadow: var(--shadow), 0 0 20px rgba(99,132,255,0.08); }
 .card-label { font-size: 0.78rem; color: var(--text-muted); letter-spacing: 0.3px; margin-bottom: 14px; }
 .card-label-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-.chart-card { padding: 20px 18px 10px; }
+.chart-card { padding: 20px 18px 10px; position: relative; }
+.chart-card canvas { width: 100%; display: block; cursor: crosshair; }
+.chart-tooltip {
+  position: absolute; display: none; pointer-events: none;
+  transform: translateX(-50%);
+  background: #0e1320; border: 1px solid var(--border-hover);
+  border-radius: 6px; padding: 4px 9px;
+  font-size: 0.72rem; font-family: var(--mono); color: var(--text);
+  white-space: nowrap; box-shadow: var(--shadow); z-index: 5;
+}
 
 /* Stat row */
 .stat-row { display: flex; gap: 10px; flex-wrap: wrap; }
