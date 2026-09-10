@@ -1,3 +1,4 @@
+```javascript
 // ── Design tokens (match CSS) ───────────────────────────────────────
 const COLORS = {
   blue: "#6366F1",
@@ -144,7 +145,7 @@ function drawLineChart(canvas, values, opts = {}) {
   ctx.clearRect(0, 0, W, H);
   if (!values.length) return;
 
-  const padL = 52, padR = 8, padT = 10, padB = 18;
+  const padL = 58, padR = 8, padT = 10, padB = 22;
   const plotW = Math.max(1, W - padL - padR);
   const plotH = Math.max(1, H - padT - padB);
 
@@ -162,7 +163,7 @@ function drawLineChart(canvas, values, opts = {}) {
   ctx.strokeStyle = "rgba(0,0,0,0.06)";
   ctx.lineWidth = 1;
   ctx.fillStyle = COLORS.textMuted;
-  ctx.font = "10px 'JetBrains Mono', monospace";
+  ctx.font = "12px \'JetBrains Mono\', monospace";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   const gridLines = 4;
@@ -227,7 +228,6 @@ function drawLineChart(canvas, values, opts = {}) {
     });
   }
   
-  canvas._snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
   // Hover interaction
   attachHover(canvas, { xAt, yAt, values, padL, padT, plotW, plotH, tooltipFormat: opts.tooltipFormat, color: opts.color || COLORS.blue });
@@ -239,7 +239,7 @@ function drawBarChart(canvas, values, colors, opts = {}) {
   ctx.clearRect(0, 0, W, H);
   if (!values.length) return;
 
-  const padL = 46, padR = 8, padT = 10, padB = 10;
+  const padL = 58, padR = 8, padT = 10, padB = 10;
   const plotW = Math.max(1, W - padL - padR);
   const plotH = Math.max(1, H - padT - padB);
 
@@ -250,7 +250,7 @@ function drawBarChart(canvas, values, colors, opts = {}) {
   ctx.strokeStyle = "rgba(0,0,0,0.06)";
   ctx.lineWidth = 1;
   ctx.fillStyle = COLORS.textMuted;
-  ctx.font = "10px 'JetBrains Mono', monospace";
+  ctx.font = "12px \'JetBrains Mono\', monospace";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   const gridLines = 3;
@@ -274,7 +274,6 @@ function drawBarChart(canvas, values, colors, opts = {}) {
     ctx.fill();
   });
   
-  canvas._snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
   attachHover(canvas, {
     xAt: (i) => padL + i * (plotW / values.length) + (plotW / values.length) / 2,
@@ -363,307 +362,51 @@ function getOrCreateTooltip(canvas) {
 }
 
 function drawCrosshair(canvas, cfg, px, py) {
-  const ctx = canvas.getContext("2d");
-  if (canvas._snapshot) {
-    ctx.putImageData(canvas._snapshot, 0, 0);
+  let line = canvas._crosshair;
+  if (!line) {
+    line = document.createElement("div");
+    line.style.position = "absolute";
+    line.style.borderLeft = "1px dashed var(--border-hover, rgba(255,255,255,0.2))";
+    line.style.pointerEvents = "none";
+    line.style.display = "none";
+    line.style.zIndex = "10";
+    
+    let dot = document.createElement("div");
+    dot.style.position = "absolute";
+    dot.style.width = "6px";
+    dot.style.height = "6px";
+    dot.style.borderRadius = "50%";
+    dot.style.background = cfg.color || "#FFF";
+    dot.style.transform = "translate(-50%, -50%)";
+    dot.style.display = "none";
+    dot.style.pointerEvents = "none";
+    dot.style.zIndex = "11";
+    
+    canvas.parentElement.style.position = "relative";
+    canvas.parentElement.appendChild(line);
+    canvas.parentElement.appendChild(dot);
+    canvas._crosshair = line;
+    canvas._crosshairDot = dot;
   }
-  const dpr = window.devicePixelRatio || 1;
-  ctx.save();
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.beginPath();
-  ctx.setLineDash([3, 3]);
-  ctx.strokeStyle = "rgba(0,0,0,0.12)";
-  ctx.lineWidth = 1;
-  ctx.moveTo(px, cfg.padT);
-  ctx.lineTo(px, cfg.padT + cfg.plotH);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  if (!cfg.isBar) {
-    ctx.beginPath();
-    ctx.fillStyle = cfg.color;
-    ctx.arc(px, py, 3, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
-}
-
-// Re-render trigger stored per canvas so we can redraw cleanly on mouseleave
-const lastDraw = new WeakMap();
-
-// ── DOM refs ──────────────────────────────────────────────────────────
-const el = (id) => document.getElementById(id);
-const searchInput = el("searchInput");
-const searchDropdown = el("searchDropdown");
-const searchInputWrap = document.querySelector(".search-input-wrap");
-const stagedDot = el("stagedDot");
-const applyBtn = el("applyBtn");
-
-// ── Search ────────────────────────────────────────────────────────────
-searchInput.addEventListener("input", (e) => {
-  const val = e.target.value;
-  clearTimeout(searchDebounce);
-  state.staged = null;
-  stagedDot.classList.remove("show");
-  applyBtn.classList.remove("active");
-  applyBtn.disabled = true;
-  if (val.length < 1) { searchDropdown.classList.remove("show"); return; }
-  searchDebounce = setTimeout(async () => {
-    try {
-      const r = await fetch(`/api/search?q=${encodeURIComponent(val)}`);
-      const d = await r.json();
-      renderSearchResults(d.results || []);
-    } catch { renderSearchResults([]); }
-  }, 280);
-});
-searchInput.addEventListener("focus", () => {
-  searchInputWrap.classList.add("focused");
-  if (searchDropdown.children.length) searchDropdown.classList.add("show");
-});
-searchInput.addEventListener("blur", () => searchInputWrap.classList.remove("focused"));
-document.addEventListener("mousedown", (e) => {
-  if (!el("searchWrap").contains(e.target)) searchDropdown.classList.remove("show");
-});
-
-function renderSearchResults(results) {
-  searchDropdown.innerHTML = results.map((r) => `
-    <div class="search-result" data-symbol="${escapeHtml(r.symbol)}" data-name="${escapeHtml(r.name)}">
-      <div class="search-result-left">
-        <span class="search-result-symbol">${escapeHtml(r.symbol)}</span>
-        <span class="search-result-name">${escapeHtml(r.name)}</span>
-      </div>
-      <span class="search-result-exchange">${escapeHtml(r.exchange)}</span>
-    </div>
-  `).join("");
-  searchDropdown.classList.toggle("show", results.length > 0);
-  searchDropdown.querySelectorAll(".search-result").forEach((node) => {
-    node.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      const symbol = node.dataset.symbol;
-      state.staged = symbol;
-      searchInput.value = symbol;
-      searchDropdown.classList.remove("show");
-      stagedDot.classList.add("show");
-      applyBtn.classList.add("active");
-      applyBtn.disabled = false;
-    });
-  });
-}
-
-applyBtn.addEventListener("click", () => {
-  if (!state.staged) return;
-  loadTicker(state.staged);
-  state.staged = null;
-  searchInput.value = "";
-  stagedDot.classList.remove("show");
-  applyBtn.classList.remove("active");
-  applyBtn.disabled = true;
-});
-
-// ── Timeframe & Market Movers ──────────────────────────────────────────
-function initTimeframeButtons() {
-  const container = document.querySelector(".tf-buttons-container") || el("priceChart").parentElement;
-  if (!container) return;
-  const buttons = container.querySelectorAll(".tf-btn");
-  if (!buttons.length) return;
   
-  buttons.forEach(btn => {
-    btn.addEventListener("click", async (e) => {
-      buttons.forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      const label = btn.textContent.trim();
-      const tf = TIMEFRAMES.find(t => t.label === label) || TIMEFRAMES[1];
-      state.timeframe = tf.range;
-      
-      try {
-        const res = await fetch(`/api/chart/${state.ticker}?range=${tf.range}&interval=${tf.interval}`);
-        if (!res.ok) throw new Error("Failed to fetch timeframe");
-        const data = await res.json();
-        state.history = data.history || [];
-        renderStats();
-        renderPriceChart();
-        updatePriceChangeBadge();
-        renderVolumeChart();
-      } catch (err) {
-        console.error("Timeframe fetch error", err);
-      }
-    });
-  });
-}
-
-function updatePriceChangeBadge() {
-  const badge = el("priceChangeBadge");
-  if (!badge) return;
-  if (state.history.length < 2) {
-    badge.textContent = "—";
-    badge.style.color = COLORS.textMuted;
+  if (px < 0 || py < 0) {
+    line.style.display = "none";
+    canvas._crosshairDot.style.display = "none";
     return;
   }
-  const firstClose = state.history[0].close;
-  const lastClose = state.history[state.history.length - 1].close;
-  const diff = (lastClose - firstClose) / firstClose * 100;
-  const isUp = diff >= 0;
-  badge.textContent = `${isUp ? "▲" : "▼"} ${Math.abs(diff).toFixed(1)}%`;
-  badge.style.color = isUp ? COLORS.green : COLORS.red;
-}
-
-
-
-function getMonthlyData(history) {
-  const map = new Map();
-  for (const d of history) {
-    const month = d.date.substring(0, 7);
-    if (!map.has(month)) map.set(month, { date: month, open: d.open, close: d.close, volume: 0 });
-    const m = map.get(month);
-    m.close = d.close;
-    m.volume += d.volume || 0;
-  }
-  return Array.from(map.values());
-}
-
-function computeStats() {
-  const h = state.history;
-  const mh = getMonthlyData(h);
-  if (!h.length || !mh.length) return {};
-  const last = h[h.length - 1];
-  const mlast = mh[mh.length - 1];
-  const mprev = mh.length > 1 ? mh[mh.length - 2] : mlast;
-  const myr = mh.length > 12 ? mh[mh.length - 13] : mh[0];
-  const monthlyChange = mprev.close ? parseFloat(((last.close - mprev.close) / mprev.close * 100).toFixed(2)) : null;
-  const yrReturn = myr.close ? parseFloat(((last.close - myr.close) / myr.close * 100).toFixed(2)) : null;
-  const avgVol = Math.round(mh.slice(-12).reduce((s, d) => s + d.volume, 0) / Math.min(mh.length, 12));
-  return { lastClose: last.close, lastDate: last.date.substring(0, 7), monthlyChange, yrReturn, avgVol };
-}
-
-function renderTickerBar() {
-  if (el("tickerBar")) el("tickerBar").style.display = "flex";
-  if (el("tickerSymbol")) el("tickerSymbol").textContent = state.ticker;
-  if (el("tickerName")) el("tickerName").textContent = state.stockName;
-  if (el("tickerCurrency")) el("tickerCurrency").textContent = state.currency;
-}
-
-function renderStats() {
-  const stats = computeStats();
-  state._stats = stats;
-  const items = [
-    { label: "📍 Last Close", value: `${currSym(state.currency)}${fmt(stats.lastClose)}`, color: COLORS.text, sub: stats.lastDate },
-    { label: "Monthly", value: stats.monthlyChange != null ? `${stats.monthlyChange >= 0 ? "+" : ""}${stats.monthlyChange}%` : "—", color: stats.monthlyChange >= 0 ? COLORS.green : COLORS.red },
-    { label: "1Y Return", value: stats.yrReturn != null ? `${stats.yrReturn >= 0 ? "+" : ""}${stats.yrReturn}%` : "—", color: stats.yrReturn >= 0 ? COLORS.green : COLORS.red },
-    { label: "Monthly Vol", value: fmtBig(stats.avgVol), color: COLORS.text },
-  ];
-  let html = items.map((it) => `
-    <div class="card stat-card">
-      <div class="stat-label">${it.label}</div>
-      <div class="stat-value" style="color:${it.color}">${it.value}</div>
-      ${it.sub ? `<div style="font-size:12px; color:${COLORS.textSec}; margin-top:2px; font-family:var(--mono)">${it.sub}</div>` : ""}
-    </div>
-  `).join("");
-  html += `
-    <div class="card signal-card" id="signalCard">
-      <div class="stat-label">Signal</div>
-      <div class="signal-value-row">
-        <span class="stat-value" id="signalValue" style="color:${COLORS.textMuted}">—</span>
-      </div>
-    </div>
-  `;
-  if (el("statRow")) el("statRow").innerHTML = html;
-}
-
-function updateSignalStat() {
-  const a = state.analysis;
-  const card = el("signalCard");
-  const valueEl = el("signalValue");
-  if (!a || !card || !valueEl) return;
-  const sig = SIGNAL_META[a.signal] || SIGNAL_META.HOLD;
-  card.style.borderColor = sig.color + "33";
-  card.classList.add("glow");
-  valueEl.style.color = sig.color;
-  valueEl.innerHTML = `${a.signal} <span class="signal-conf-badge">${a.confidence}%</span>`;
-}
-
-function renderPriceChart() {
-  const canvas = el("priceChart");
-  if (!canvas) return;
-  const data = state.history.map((d) => d.close);
-  const dates = state.history.map((d) => d.date);
-
-  const firstClose = data[0];
-  const lastClose = data[data.length - 1];
-  const isUp = lastClose >= firstClose;
-  const chartColor = isUp ? COLORS.green : COLORS.red;
-
-  let lastYear = null;
-  let lastMonth = null;
-  const xLabels = state.history.map((d) => {
-    const dt = new Date(d.date);
-    const y = dt.getFullYear();
-    const m = dt.getMonth();
-    
-    if (state.timeframe === "6mo" || state.timeframe === "1y") {
-      if (m % 2 === 0 && m !== lastMonth) {
-        lastMonth = m;
-        const moStr = dt.toLocaleString('default', { month: 'short' });
-        const yrStr = String(y).slice(-2);
-        return `${moStr} '${yrStr}`;
-      }
-    } else {
-      if (y % 2 === 0 && y !== lastYear) {
-        lastYear = y;
-        return String(y);
-      }
-    }
-    return "";
-  });
-
-  drawLineChart(canvas, data, {
-    color: chartColor,
-    fillColor: chartColor,
-    yFormat: (v) => currSym(state.currency) + fmtBig(v),
-    xLabels,
-    tooltipFormat: (v, i) => `${dates[i]}  ${currSym(state.currency)}${fmt(v)}`,
-  });
-}
-
-function renderVolumeChart() {
-  const canvas = el("volumeChart");
-  if (!canvas || !state.history.length) return;
-  const mh = getMonthlyData(state.history);
-  const data = mh.map((d) => d.volume);
-  const dates = mh.map((d) => d.date);
-  const colors = mh.map((d) => d.close >= (d.open || d.close) ? COLORS.green + "aa" : COLORS.red + "88");
-
-  drawBarChart(canvas, data, colors, {
-    yFormat: (v) => fmtBig(v),
-    tooltipFormat: (v, i) => `${dates[i]}  Vol ${fmtBig(v)}`,
-  });
-}
-
-function renderForecastChart() {
-  const a = state.analysis;
-  if (!a || !a.forecastCurve) return;
-  const stats = state._stats;
-  const months = ["Now", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12"];
-  const endPrice = a.forecastCurve[a.forecastCurve.length - 1];
-  const isUp = endPrice >= stats.lastClose;
-  const diff = ((endPrice - stats.lastClose) / stats.lastClose * 100).toFixed(1);
-  const lineColor = isUp ? COLORS.green : COLORS.red;
-
-  const deltaEl = el("forecastDelta");
-  if (deltaEl) {
-    deltaEl.textContent = `${isUp ? "▲" : "▼"} ${diff}%`;
-    deltaEl.style.color = lineColor;
-    deltaEl.style.background = isUp ? COLORS.greenDim : COLORS.redDim;
-  }
-
-  const canvas = el("forecastChart");
-  if (canvas) {
-    drawLineChart(canvas, a.forecastCurve, {
-      color: lineColor,
-      fillColor: lineColor,
-      refValue: stats.lastClose,
-      yFormat: (v) => currSym(state.currency) + fmt(v, 0),
-      xLabels: months,
-      tooltipFormat: (v, i) => `${months[i]}  ${currSym(state.currency)}${fmt(v)}`,
-    });
+  
+  line.style.display = "block";
+  line.style.left = px + "px";
+  line.style.top = cfg.padT + "px";
+  line.style.height = cfg.plotH + "px";
+  
+  if (!cfg.isBar) {
+    canvas._crosshairDot.style.display = "block";
+    canvas._crosshairDot.style.left = px + "px";
+    canvas._crosshairDot.style.top = py + "px";
+    canvas._crosshairDot.style.background = cfg.color || "#FFF";
+  } else {
+    canvas._crosshairDot.style.display = "none";
   }
 }
 
@@ -883,3 +626,4 @@ async function loadTicker(ticker) {
 if (typeof loadTicker === "function") {
   loadTicker(state.ticker);
 }
+```
