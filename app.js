@@ -114,14 +114,9 @@ let searchDebounce = null;
 // ── Lightweight canvas charting (no external dependency) ───────────────
 function setupCanvas(canvas) {
   const dpr = window.devicePixelRatio || 1;
-  
-  // Temporarily reset inline width to allow parent to shrink/grow natively
-  canvas.style.width = "100%"; 
-  const cssWidth = canvas.parentElement.clientWidth;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const cssWidth = rect.width;
   const cssHeight = parseInt(canvas.getAttribute("height"), 10) || 200;
-  
-  canvas.style.width = cssWidth + "px";
-  canvas.style.height = cssHeight + "px";
   
   canvas.width = Math.max(1, Math.round(cssWidth * dpr));
   canvas.height = Math.max(1, Math.round(cssHeight * dpr));
@@ -541,7 +536,6 @@ function renderPriceChart() {
   let lastYear = null;
   const xLabels = state.history.map((d) => {
     const y = new Date(d.date).getFullYear();
-    // Only print the year once, and only every ~5 years
     if (y % 5 === 0 && y !== lastYear) {
       lastYear = y;
       return String(y);
