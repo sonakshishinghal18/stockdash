@@ -13,7 +13,7 @@ from typing import Optional
 app = FastAPI(title="StockDash")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-1.5-pro"
+GEMINI_MODEL = "gemini-3.8-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 # ── Yahoo Finance wrapper endpoints ────────────────────────────────────
