@@ -1,7 +1,9 @@
 import os
 import json
 import httpx
-import xml.etree.ElementTree as ET
+import asyncio
+import yfinance as yf
+from yahooquery import search
 from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -14,21 +16,18 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-2.0-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
-YF_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-}
-
-# ── Yahoo Finance proxy endpoints ──────────────────────────────────────
-# No CORS needed — frontend and API are served from the same origin.
+# ── Yahoo Finance wrapper endpoints ────────────────────────────────────
+# We use yahooquery for search and yfinance for data to bypass 403/429 blocks on Render.
 
 @app.get("/api/search")
 async def search_stocks(q: str = Query(..., min_length=1)):
-    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={q}&quotesCount=8&newsCount=0"
-    async with httpx.AsyncClient() as client:
-        r = await client.get(url, headers=YF_HEADERS, timeout=10)
-    if r.status_code != 200:
-        raise HTTPException(502, "Yahoo Finance search unavailable")
-    data = r.json()
+    def _search():
+        try:
+            return search(q)
+        except Exception:
+            return {"quotes": []}
+            
+    data = await asyncio.to_thread(_search)
     results = []
     for q_item in data.get("quotes", []):
         if q_item.get("quoteType") in ("EQUITY", "ETF"):
@@ -43,95 +42,76 @@ async def search_stocks(q: str = Query(..., min_length=1)):
 
 @app.get("/api/chart/{ticker}")
 async def get_chart(ticker: str, interval: str = "1mo", range: str = "20y"):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval={interval}&range={range}"
-    async with httpx.AsyncClient() as client:
-        r = await client.get(url, headers=YF_HEADERS, timeout=15)
-    if r.status_code != 200:
-        raise HTTPException(502, "Yahoo Finance chart unavailable")
-    raw = r.json()
-    result = raw.get("chart", {}).get("result", [])
-    if not result:
+    def _get_history():
+        tkr = yf.Ticker(ticker)
+        # We need the currency; info is blocked on Render, so use fast_info fallback
+        try:
+            currency = tkr.fast_info.get("currency", "USD")
+        except Exception:
+            currency = "USD"
+        
+        hist = tkr.history(period=range, interval=interval)
+        return hist, currency
+
+    try:
+        hist, currency = await asyncio.to_thread(_get_history)
+    except Exception as e:
+        raise HTTPException(502, f"Failed to fetch chart: {str(e)}")
+
+    if hist.empty:
         raise HTTPException(404, f"No chart data for {ticker}")
 
-    item = result[0]
-    timestamps = item.get("timestamp", [])
-    indicators = item.get("indicators", {}).get("quote", [{}])[0]
-    opens = indicators.get("open", [])
-    closes = indicators.get("close", [])
-    volumes = indicators.get("volume", [])
-
-    meta = item.get("meta", {})
-    currency = meta.get("currency", "USD")
-    name = meta.get("shortName") or meta.get("longName") or ticker
-
     history = []
-    for i, ts in enumerate(timestamps):
-        if i < len(closes) and closes[i] is not None:
-            history.append({
-                "date": datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d"),
-                "open": round(opens[i], 2) if opens[i] else None,
-                "close": round(closes[i], 2),
-                "volume": volumes[i] if i < len(volumes) else 0,
-            })
+    import pandas as pd
+    for index, row in hist.iterrows():
+        history.append({
+            "date": index.strftime("%Y-%m-%d"),
+            "open": round(row["Open"], 2) if pd.notna(row.get("Open")) else None,
+            "close": round(row["Close"], 2),
+            "volume": int(row["Volume"]) if "Volume" in row and pd.notna(row["Volume"]) else 0,
+        })
 
-    return {"ticker": ticker, "name": name, "currency": currency, "history": history}
+    return {"ticker": ticker, "name": ticker, "currency": currency, "history": history}
 
 
 @app.get("/api/news/{ticker}")
 async def get_news(ticker: str):
-    url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
-    async with httpx.AsyncClient() as client:
-        r = await client.get(url, headers=YF_HEADERS, timeout=10)
-    if r.status_code != 200:
-        return {"articles": []}
+    def _get_news():
+        return yf.Ticker(ticker).news
 
     try:
-        root = ET.fromstring(r.text)
-    except ET.ParseError:
+        news_items = await asyncio.to_thread(_get_news)
+    except Exception:
         return {"articles": []}
 
-    cutoff = datetime.utcnow() - timedelta(days=90)
+    cutoff_ts = (datetime.utcnow() - timedelta(days=90)).timestamp()
+    
     impact_keywords = [
         "earnings", "revenue", "profit", "loss", "merger", "acquisition",
         "buyback", "dividend", "surge", "plunge", "crash", "rally", "upgrade",
-        "downgrade", "layoff", "restructur", "FDA", "approval", "lawsuit",
-        "regulation", "tariff", "ban", "recall", "bankrupt", "IPO", "split",
+        "downgrade", "layoff", "restructur", "fda", "approval", "lawsuit",
+        "regulation", "tariff", "ban", "recall", "bankrupt", "ipo", "split",
     ]
 
     articles = []
-    for item in root.iter("item"):
-        title = item.findtext("title", "")
-        link = item.findtext("link", "")
-        pub_date_str = item.findtext("pubDate", "")
-        description = item.findtext("description", "")
-        publisher = ""
-        source_el = item.find("source")
-        if source_el is not None:
-            publisher = source_el.text or source_el.get("url", "")
-
-        pub_date = None
-        if pub_date_str:
-            for fmt in ["%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S GMT"]:
-                try:
-                    pub_date = datetime.strptime(pub_date_str.strip(), fmt)
-                    if pub_date.tzinfo:
-                        pub_date = pub_date.replace(tzinfo=None)
-                    break
-                except ValueError:
-                    continue
-
-        if pub_date and pub_date < cutoff:
+    for item in news_items:
+        pub_ts = item.get("providerPublishTime", 0)
+        if pub_ts < cutoff_ts:
             continue
 
-        combined = (title + " " + description).lower()
+        title = item.get("title", "")
+        
+        combined = title.lower()
         is_impactful = any(kw in combined for kw in impact_keywords)
+        
+        pub_date = datetime.utcfromtimestamp(pub_ts).strftime("%a, %d %b %Y %H:%M:%S GMT")
 
         articles.append({
             "title": title,
-            "link": link,
-            "pubDate": pub_date_str,
-            "publisher": publisher,
-            "description": description[:200],
+            "link": item.get("link", ""),
+            "pubDate": pub_date,
+            "publisher": item.get("publisher", ""),
+            "description": title, # fallback to title since yfinance news dict doesn't expose description
             "isImpactful": is_impactful,
         })
 
@@ -224,11 +204,9 @@ async def health():
 async def serve_index():
     return FileResponse("index.html")
 
-
 @app.get("/style.css")
 async def serve_css():
     return FileResponse("style.css", media_type="text/css")
-
 
 @app.get("/app.js")
 async def serve_js():
