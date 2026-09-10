@@ -179,7 +179,18 @@ async def get_news(ticker: str):
             seen.append(title_lower)
             deduped.append(item)
             
-    deduped.sort(key=lambda x: x["date"], reverse=True)
+    TIER_1 = ["bloomberg", "reuters", "wsj", "wall street journal", "financial times", "cnbc", "economic times", "mint", "business standard", "moneycontrol", "yahoo finance"]
+    
+    def get_tier(pub: str) -> int:
+        p = pub.lower()
+        if not p: return 2
+        for t in TIER_1:
+            if t in p:
+                return 1
+        return 2
+        
+    deduped.sort(key=lambda x: (get_tier(x["publisher"]), -x["date"].timestamp()))
+    deduped = deduped[:8]
     
     impact_keywords = [
         "earnings", "revenue", "profit", "loss", "merger", "acquisition",
