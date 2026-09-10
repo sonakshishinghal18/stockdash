@@ -823,6 +823,46 @@ window.addEventListener("resize", () => {
   }, 150);
 });
 
+async function loadTicker(ticker) {
+  state.ticker = ticker;
+  el("content").style.display = "none";
+  el("errorBox").style.display = "none";
+  el("loadingMain").style.display = "flex";
+  el("loadingMainText").textContent = `Fetching ${ticker} data…`;
+
+  try {
+    const [cRes, nRes] = await Promise.all([
+      fetch(`/api/chart/${ticker}`),
+      fetch(`/api/news/${ticker}`),
+    ]);
+    if (!cRes.ok) throw new Error("Failed to load chart data");
+    const cData = await cRes.json();
+    const nData = nRes.ok ? await nRes.json() : { articles: [] };
+
+    state.history = cData.history || [];
+    state.stockName = cData.name || ticker;
+    state.currency = cData.currency || "USD";
+    state.news = nData.articles || [];
+
+    el("loadingMain").style.display = "none";
+    renderTickerBar();
+    if (!state.history.length) throw new Error("No price history available");
+
+    el("content").style.display = "flex";
+    initTimeframeButtons(); // Re-bind if necessary
+    renderStats();
+    renderPriceChart();
+    renderVolumeChart();
+    renderNews();
+
+    runAiAnalysis();
+  } catch (err) {
+    el("loadingMain").style.display = "none";
+    el("errorBox").style.display = "block";
+    el("errorBox").textContent = err.message || "Error loading stock";
+  }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────
 if (typeof loadTicker === "function") {
   loadTicker(state.ticker);
