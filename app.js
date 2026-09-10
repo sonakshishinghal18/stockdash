@@ -148,8 +148,8 @@ function drawLineChart(canvas, values, opts = {}) {
   const plotW = Math.max(1, W - padL - padR);
   const plotH = Math.max(1, H - padT - padB);
 
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const min = values.reduce((a,b)=>Math.min(a,b), Infinity);
+  const max = values.reduce((a,b)=>Math.max(a,b), -Infinity);
   const range = (max - min) || Math.abs(max) || 1;
   const niceMin = min - range * 0.08;
   const niceMax = max + range * 0.08;
@@ -243,7 +243,7 @@ function drawBarChart(canvas, values, colors, opts = {}) {
   const plotW = Math.max(1, W - padL - padR);
   const plotH = Math.max(1, H - padT - padB);
 
-  const max = Math.max(...values, 1);
+  const max = values.reduce((a,b)=>Math.max(a,b), 1);
   const barGap = 1.5;
   const barW = Math.max(1, plotW / values.length - barGap);
 
@@ -301,7 +301,14 @@ const hoverState = new WeakMap();
 function attachHover(canvas, cfg) {
   // Remove any previous listener for this canvas
   const prev = hoverState.get(canvas);
-  if (prev) canvas.removeEventListener("mousemove", prev.move), canvas.removeEventListener("mouseleave", prev.leave);
+  if (prev) {
+    canvas.removeEventListener("mousemove", prev.move);
+    canvas.removeEventListener("mouseleave", prev.leave);
+    if (prev.touchMove) {
+      canvas.removeEventListener("touchmove", prev.touchMove);
+      canvas.removeEventListener("touchend", prev.leave);
+    }
+  }
 
   const tooltip = getOrCreateTooltip(canvas);
 
@@ -327,14 +334,19 @@ function attachHover(canvas, cfg) {
     drawCrosshair(canvas, cfg, px, py);
   };
   const leave = () => {
-    tooltip.style.display = "none";
-    if (canvas._snapshot) {
-      canvas.getContext("2d").putImageData(canvas._snapshot, 0, 0);
-    }
+    tooltip.style.opacity = "0";
+    drawCrosshair(canvas, cfg, -1, -1);
   };
-
+  
+  const touchMove = (e) => {
+    if (e.touches.length > 0) move(e.touches[0]);
+  };
+  
+  hoverState.set(canvas, { move, leave, touchMove });
   canvas.addEventListener("mousemove", move);
   canvas.addEventListener("mouseleave", leave);
+  canvas.addEventListener("touchmove", touchMove, { passive: true });
+  canvas.addEventListener("touchend", leave);
   hoverState.set(canvas, { move, leave, cfg });
 }
 
