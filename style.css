@@ -85,7 +85,7 @@ h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
 
 /* FIX: canvas sizing — no fixed height, let HTML attribute control */
 .chart-card { position: relative; padding: 20px; }
-.chart-card canvas { width: 100%; display: block; cursor: crosshair; }
+.chart-card canvas { display: block; width: 100%; cursor: crosshair; max-width: 100%; }
 .chart-tooltip { position: absolute; background: var(--surface-solid); border: 1px solid var(--border-hover); color: var(--text); padding: 8px 12px; border-radius: var(--r-xs); font-size: 12px; font-family: var(--mono); pointer-events: none; display: none; box-shadow: var(--shadow); z-index: 10; white-space: nowrap; transform: translateX(-50%); }
 
 .timeframe-row { display: flex; gap: 4px; }
