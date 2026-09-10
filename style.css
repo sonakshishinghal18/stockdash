@@ -198,7 +198,7 @@ h1 {
   box-shadow: var(--shadow-lg);
 }
 
-.search-dropdown.visible {
+.search-dropdown.show {
   display: block;
 }
 
