@@ -125,15 +125,16 @@ const hoverState = new WeakMap();
 
 function setupCanvas(canvas) {
   const dpr = window.devicePixelRatio || 1;
-  // Read target height from HTML attribute, width from PARENT (not canvas itself — prevents feedback loop)
-  const cssHeight = parseInt(canvas.getAttribute("height"), 10) || 200;
   const parent = canvas.parentElement;
-  const parentStyle = getComputedStyle(parent);
-  const parentPadding = parseFloat(parentStyle.paddingLeft) + parseFloat(parentStyle.paddingRight);
-  const cssWidth = parent.clientWidth - parentPadding;
-  // Lock CSS dimensions BEFORE setting buffer size
-  canvas.style.width = cssWidth + "px";
+  // Prevent canvas buffer from pushing parent wider
+  parent.style.overflow = "hidden";
+  // Read display width from canvas (CSS width:100% makes this match parent content area)
+  const cssWidth = canvas.clientWidth || parent.clientWidth;
+  // Read target height from HTML attribute (each canvas has its own: 220, 100, 160)
+  const cssHeight = parseInt(canvas.getAttribute("height"), 10) || 200;
+  // Lock display height so it doesn't grow to buffer pixel size
   canvas.style.height = cssHeight + "px";
+  // Set backing buffer at device pixel ratio
   canvas.width = Math.max(1, Math.round(cssWidth * dpr));
   canvas.height = Math.max(1, Math.round(cssHeight * dpr));
   const ctx = canvas.getContext("2d");
@@ -217,9 +218,8 @@ function drawBarChart(canvas, values, colors, opts = {}) {
     const x = padL + i * (plotW / values.length) + barGap / 2;
     const h = (v / max) * plotH; const y = padT + plotH - h;
     ctx.fillStyle = colors[i] || COLORS.blue;
-    const r = Math.min(2, barW / 2);
     if (h <= 0) return;
-    r2 = Math.min(r, w2 = barW / 2, h);
+    const r = Math.min(2, barW / 2, h);
     ctx.beginPath(); ctx.moveTo(x, y + h); ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r);
     ctx.lineTo(x + barW - r, y); ctx.arcTo(x + barW, y, x + barW, y + r, r); ctx.lineTo(x + barW, y + h); ctx.closePath(); ctx.fill();
   });
