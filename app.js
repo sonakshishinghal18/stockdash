@@ -109,8 +109,256 @@ let state = {
   aiSource: "simulated",
   staged: null,
 };
-let charts = { price: null, volume: null, forecast: null };
 let searchDebounce = null;
+
+// ── Lightweight canvas charting (no external dependency) ───────────────
+function setupCanvas(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssWidth = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const cssHeight = parseInt(canvas.getAttribute("height"), 10) || 200;
+  canvas.style.height = cssHeight + "px";
+  canvas.width = Math.max(1, Math.round(cssWidth * dpr));
+  canvas.height = Math.max(1, Math.round(cssHeight * dpr));
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, width: cssWidth, height: cssHeight };
+}
+
+function drawLineChart(canvas, values, opts = {}) {
+  lastDraw.set(canvas, () => drawLineChart(canvas, values, opts));
+  const { ctx, width: W, height: H } = setupCanvas(canvas);
+  ctx.clearRect(0, 0, W, H);
+  if (!values.length) return;
+
+  const padL = 52, padR = 8, padT = 10, padB = 18;
+  const plotW = Math.max(1, W - padL - padR);
+  const plotH = Math.max(1, H - padT - padB);
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = (max - min) || Math.abs(max) || 1;
+  const niceMin = min - range * 0.08;
+  const niceMax = max + range * 0.08;
+  const niceRange = niceMax - niceMin || 1;
+
+  const xAt = (i) => padL + (values.length > 1 ? (i / (values.length - 1)) * plotW : plotW / 2);
+  const yAt = (v) => padT + plotH - ((v - niceMin) / niceRange) * plotH;
+
+  // Grid + y labels
+  ctx.strokeStyle = "rgba(255,255,255,0.04)";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = COLORS.textMuted;
+  ctx.font = "10px 'JetBrains Mono', monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  const gridLines = 4;
+  for (let i = 0; i <= gridLines; i++) {
+    const v = niceMin + (niceRange * i) / gridLines;
+    const y = yAt(v);
+    ctx.beginPath();
+    ctx.moveTo(padL, Math.round(y) + 0.5);
+    ctx.lineTo(W - padR, Math.round(y) + 0.5);
+    ctx.stroke();
+    if (opts.yFormat) ctx.fillText(opts.yFormat(v), padL - 8, y);
+  }
+
+  // Reference line (e.g. current price on forecast chart)
+  if (opts.refValue != null) {
+    const y = yAt(opts.refValue);
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = COLORS.textMuted;
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(W - padR, y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Area fill
+  if (opts.fillColor) {
+    const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+    grad.addColorStop(0, opts.fillColor + "33");
+    grad.addColorStop(1, opts.fillColor + "00");
+    ctx.beginPath();
+    ctx.moveTo(xAt(0), yAt(values[0]));
+    values.forEach((v, i) => ctx.lineTo(xAt(i), yAt(v)));
+    ctx.lineTo(xAt(values.length - 1), padT + plotH);
+    ctx.lineTo(xAt(0), padT + plotH);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+  }
+
+  // Line
+  ctx.beginPath();
+  values.forEach((v, i) => {
+    const x = xAt(i), y = yAt(v);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = opts.color || COLORS.blue;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.stroke();
+
+  // X labels (sparse)
+  if (opts.xLabels) {
+    ctx.fillStyle = COLORS.textMuted;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    opts.xLabels.forEach((label, i) => {
+      if (label) ctx.fillText(label, xAt(i), padT + plotH + 5);
+    });
+  }
+
+  // Hover interaction
+  attachHover(canvas, { xAt, yAt, values, padL, padT, plotW, plotH, tooltipFormat: opts.tooltipFormat, color: opts.color || COLORS.blue });
+}
+
+function drawBarChart(canvas, values, colors, opts = {}) {
+  lastDraw.set(canvas, () => drawBarChart(canvas, values, colors, opts));
+  const { ctx, width: W, height: H } = setupCanvas(canvas);
+  ctx.clearRect(0, 0, W, H);
+  if (!values.length) return;
+
+  const padL = 46, padR = 8, padT = 10, padB = 10;
+  const plotW = Math.max(1, W - padL - padR);
+  const plotH = Math.max(1, H - padT - padB);
+
+  const max = Math.max(...values, 1);
+  const barGap = 1.5;
+  const barW = Math.max(1, plotW / values.length - barGap);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.04)";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = COLORS.textMuted;
+  ctx.font = "10px 'JetBrains Mono', monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  const gridLines = 3;
+  for (let i = 0; i <= gridLines; i++) {
+    const v = (max * i) / gridLines;
+    const y = padT + plotH - (v / max) * plotH;
+    ctx.beginPath();
+    ctx.moveTo(padL, Math.round(y) + 0.5);
+    ctx.lineTo(W - padR, Math.round(y) + 0.5);
+    ctx.stroke();
+    if (opts.yFormat) ctx.fillText(opts.yFormat(v), padL - 8, y);
+  }
+
+  values.forEach((v, i) => {
+    const x = padL + i * (plotW / values.length) + barGap / 2;
+    const h = (v / max) * plotH;
+    const y = padT + plotH - h;
+    ctx.fillStyle = colors[i] || COLORS.blue;
+    const r = Math.min(2, barW / 2);
+    roundRectTop(ctx, x, y, barW, h, r);
+    ctx.fill();
+  });
+
+  attachHover(canvas, {
+    xAt: (i) => padL + i * (plotW / values.length) + (plotW / values.length) / 2,
+    yAt: (v) => padT + plotH - (v / max) * plotH,
+    values, padL, padT, plotW, plotH,
+    tooltipFormat: opts.tooltipFormat, color: COLORS.blue, isBar: true,
+  });
+}
+
+function roundRectTop(ctx, x, y, w, h, r) {
+  if (h <= 0) { ctx.beginPath(); return; }
+  r = Math.min(r, w / 2, h);
+  ctx.beginPath();
+  ctx.moveTo(x, y + h);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h);
+  ctx.closePath();
+}
+
+const hoverState = new WeakMap();
+function attachHover(canvas, cfg) {
+  // Remove any previous listener for this canvas
+  const prev = hoverState.get(canvas);
+  if (prev) canvas.removeEventListener("mousemove", prev.move), canvas.removeEventListener("mouseleave", prev.leave);
+
+  const tooltip = getOrCreateTooltip(canvas);
+
+  const move = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const n = cfg.values.length;
+    if (n === 0) return;
+    // Find nearest index
+    let idx = 0, best = Infinity;
+    for (let i = 0; i < n; i++) {
+      const d = Math.abs(cfg.xAt(i) - mx);
+      if (d < best) { best = d; idx = i; }
+    }
+    const v = cfg.values[idx];
+    const px = cfg.xAt(idx), py = cfg.yAt(v);
+
+    // Redraw base chart then overlay crosshair (cheap: caller charts are small)
+    tooltip.style.display = "block";
+    tooltip.style.left = Math.min(Math.max(px, 40), canvas.clientWidth - 40) + "px";
+    tooltip.style.top = "2px";
+    tooltip.textContent = cfg.tooltipFormat ? cfg.tooltipFormat(v, idx) : String(v);
+
+    drawCrosshair(canvas, cfg, px, py);
+  };
+  const leave = () => {
+    tooltip.style.display = "none";
+    redrawWithoutCrosshair(canvas, cfg);
+  };
+
+  canvas.addEventListener("mousemove", move);
+  canvas.addEventListener("mouseleave", leave);
+  hoverState.set(canvas, { move, leave, cfg });
+}
+
+function getOrCreateTooltip(canvas) {
+  let wrap = canvas.parentElement;
+  if (getComputedStyle(wrap).position === "static") wrap.style.position = "relative";
+  let tip = wrap.querySelector(".chart-tooltip");
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.className = "chart-tooltip";
+    wrap.appendChild(tip);
+  }
+  return tip;
+}
+
+function drawCrosshair(canvas, cfg, px, py) {
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.beginPath();
+  ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = "rgba(255,255,255,0.15)";
+  ctx.lineWidth = 1;
+  ctx.moveTo(px, cfg.padT);
+  ctx.lineTo(px, cfg.padT + cfg.plotH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  if (!cfg.isBar) {
+    ctx.beginPath();
+    ctx.fillStyle = cfg.color;
+    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Re-render trigger stored per canvas so we can redraw cleanly on mouseleave
+const lastDraw = new WeakMap();
+function redrawWithoutCrosshair(canvas) {
+  const fn = lastDraw.get(canvas);
+  if (fn) fn();
+}
 
 // ── DOM refs ──────────────────────────────────────────────────────────
 const el = (id) => document.getElementById(id);
@@ -279,45 +527,34 @@ function updateSignalStat() {
 }
 
 function renderPriceChart() {
-  const ctx = el("priceChart").getContext("2d");
-  const labels = state.history.map((d) => d.date);
+  const canvas = el("priceChart");
   const data = state.history.map((d) => d.close);
-  if (charts.price) charts.price.destroy();
+  const dates = state.history.map((d) => d.date);
 
-  const grad = ctx.createLinearGradient(0, 0, 0, 260);
-  grad.addColorStop(0, "rgba(99,132,255,0.2)");
-  grad.addColorStop(1, "rgba(99,132,255,0)");
+  // Sparse year labels (every ~5 years)
+  const xLabels = state.history.map((d) => {
+    const y = new Date(d.date).getFullYear();
+    return y % 5 === 0 ? String(y) : "";
+  });
 
-  charts.price = new Chart(ctx, {
-    type: "line",
-    data: { labels, datasets: [{ data, borderColor: COLORS.blue, backgroundColor: grad, fill: true, borderWidth: 1.8, pointRadius: 0, tension: 0.25 }] },
-    options: chartOptions({
-      yTick: (v) => currSym(state.currency) + fmtBig(v),
-      xTick: (val, idx, ticks) => {
-        const d = new Date(labels[val.index] || labels[val]);
-        return d.getFullYear() % 5 === 0 ? d.getFullYear() : "";
-      },
-      tooltipLabel: (ctx) => `Close: ${currSym(state.currency)}${fmt(ctx.parsed.y)}`,
-    }),
+  drawLineChart(canvas, data, {
+    color: COLORS.blue,
+    fillColor: COLORS.blue,
+    yFormat: (v) => currSym(state.currency) + fmtBig(v),
+    xLabels,
+    tooltipFormat: (v, i) => `${dates[i]}  ${currSym(state.currency)}${fmt(v)}`,
   });
 }
 
 function renderVolumeChart() {
-  const ctx = el("volumeChart").getContext("2d");
-  const labels = state.history.map((d) => d.date);
+  const canvas = el("volumeChart");
   const data = state.history.map((d) => d.volume);
-  const colors = state.history.map((d) => d.close >= (d.open || d.close) ? COLORS.green + "88" : COLORS.red + "66");
-  if (charts.volume) charts.volume.destroy();
+  const dates = state.history.map((d) => d.date);
+  const colors = state.history.map((d) => d.close >= (d.open || d.close) ? COLORS.green + "aa" : COLORS.red + "88");
 
-  charts.volume = new Chart(ctx, {
-    type: "bar",
-    data: { labels, datasets: [{ data, backgroundColor: colors, borderRadius: 3 }] },
-    options: chartOptions({
-      yTick: (v) => fmtBig(v),
-      xTick: () => "",
-      tooltipLabel: (ctx) => `Volume: ${fmtBig(ctx.parsed.y)}`,
-      hideXLabels: true,
-    }),
+  drawBarChart(canvas, data, colors, {
+    yFormat: (v) => fmtBig(v),
+    tooltipFormat: (v, i) => `${dates[i]}  Vol ${fmtBig(v)}`,
   });
 }
 
@@ -336,60 +573,15 @@ function renderForecastChart() {
   deltaEl.style.color = lineColor;
   deltaEl.style.background = isUp ? COLORS.greenDim : COLORS.redDim;
 
-  const ctx = el("forecastChart").getContext("2d");
-  if (charts.forecast) charts.forecast.destroy();
-
-  const grad = ctx.createLinearGradient(0, 0, 0, 200);
-  grad.addColorStop(0, lineColor + "1a");
-  grad.addColorStop(1, lineColor + "00");
-
-  charts.forecast = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels: months,
-      datasets: [{ data: a.forecastCurve, borderColor: lineColor, backgroundColor: grad, fill: true, borderWidth: 2, pointRadius: 0, tension: 0.3 }],
-    },
-    options: chartOptions({
-      yTick: (v) => currSym(state.currency) + fmt(v, 0),
-      xTick: (val) => months[val.index] || "",
-      tooltipLabel: (ctx) => `${currSym(state.currency)}${fmt(ctx.parsed.y)}`,
-    }),
+  const canvas = el("forecastChart");
+  drawLineChart(canvas, a.forecastCurve, {
+    color: lineColor,
+    fillColor: lineColor,
+    refValue: stats.lastClose,
+    yFormat: (v) => currSym(state.currency) + fmt(v, 0),
+    xLabels: months,
+    tooltipFormat: (v, i) => `${months[i]}  ${currSym(state.currency)}${fmt(v)}`,
   });
-}
-
-function chartOptions({ yTick, xTick, tooltipLabel, hideXLabels }) {
-  return {
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: { mode: "index", intersect: false },
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: "#0e1320",
-        borderColor: "rgba(255,255,255,0.12)",
-        borderWidth: 1,
-        titleColor: COLORS.textMuted,
-        bodyColor: "#edf0f7",
-        titleFont: { size: 11 },
-        bodyFont: { size: 12, family: "'JetBrains Mono', monospace" },
-        padding: 10,
-        cornerRadius: 8,
-        callbacks: { label: tooltipLabel },
-      },
-    },
-    scales: {
-      x: {
-        grid: { color: "rgba(255,255,255,0.04)", drawTicks: false },
-        border: { display: false },
-        ticks: { color: COLORS.textMuted, font: { size: 10 }, display: !hideXLabels, callback: xTick, maxRotation: 0, autoSkip: true },
-      },
-      y: {
-        grid: { color: "rgba(255,255,255,0.04)", drawTicks: false },
-        border: { display: false },
-        ticks: { color: COLORS.textMuted, font: { size: 10 }, callback: yTick },
-      },
-    },
-  };
 }
 
 // ── AI analysis ───────────────────────────────────────────────────────
@@ -541,6 +733,19 @@ function renderNews() {
     </a>
   `).join("");
 }
+
+// ── Resize handling ──────────────────────────────────────────────────
+let resizeDebounce = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeDebounce);
+  resizeDebounce = setTimeout(() => {
+    ["priceChart", "volumeChart", "forecastChart"].forEach((id) => {
+      const canvas = el(id);
+      const fn = lastDraw.get(canvas);
+      if (fn) fn();
+    });
+  }, 150);
+});
 
 // ── Init ──────────────────────────────────────────────────────────────
 loadTicker(state.ticker);
