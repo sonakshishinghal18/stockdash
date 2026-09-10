@@ -165,23 +165,27 @@ Include 5-7 factors. Be realistic — use the headlines for sentiment and the nu
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2048},
+        "generationConfig": {
+            "temperature": 0.4, 
+            "maxOutputTokens": 2048,
+            "responseMimeType": "application/json"
+        },
     }
 
     try:
         async with httpx.AsyncClient() as client:
             r = await client.post(f"{GEMINI_URL}?key={GEMINI_API_KEY}", json=payload, timeout=30)
+        
+        if r.status_code == 404:
+            raise HTTPException(502, f"Gemini Model not found. Check if {GEMINI_MODEL} is correct.")
+        if r.status_code == 403 or r.status_code == 400:
+            raise HTTPException(502, f"Gemini API key is invalid or lacks access. Code: {r.status_code}")
         if r.status_code != 200:
-            raise HTTPException(502, f"Gemini API error: {r.status_code}")
+            raise HTTPException(502, f"Gemini API error: {r.status_code} - {r.text}")
 
         data = r.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
+        
         return json.loads(text)
 
     except json.JSONDecodeError:
