@@ -1,24 +1,27 @@
 // ── Design tokens (match CSS) ───────────────────────────────────────
 const COLORS = {
-  blue: "#6384ff",
-  cyan: "#38bdf8",
-  green: "#34d399",
-  greenDim: "rgba(52,211,153,0.12)",
-  red: "#f87171",
-  redDim: "rgba(248,113,113,0.12)",
-  amber: "#fbbf24",
-  amberDim: "rgba(251,191,36,0.10)",
-  textMuted: "#5c6478",
-  border: "rgba(255,255,255,0.06)",
-  bg: "#06080d",
+  blue: "#4F6AFF",
+  cyan: "#06B6D4",
+  green: "#10B981",
+  greenDim: "rgba(16,185,129,0.10)",
+  red: "#EF4444",
+  redDim: "rgba(239,68,68,0.08)",
+  amber: "#F59E0B",
+  amberDim: "rgba(245,158,11,0.08)",
+  textMuted: "#94A3B8",
+  border: "rgba(0,0,0,0.08)",
+  bg: "#F3F4F8",
+  surface: "#FFFFFF",
+  text: "#1A1D26",
+  textSec: "#5F6B7A",
 };
 
 const SIGNAL_META = {
-  "STRONG BUY": { color: "#34d399", bg: "rgba(52,211,153,0.12)", icon: "⬆" },
-  "BUY":        { color: "#6ee7b7", bg: "rgba(110,231,183,0.10)", icon: "↑" },
-  "HOLD":       { color: "#fbbf24", bg: "rgba(251,191,36,0.10)", icon: "→" },
-  "SELL":       { color: "#fca5a5", bg: "rgba(252,165,165,0.10)", icon: "↓" },
-  "STRONG SELL":{ color: "#f87171", bg: "rgba(248,113,113,0.12)", icon: "⬇" },
+  "STRONG BUY": { color: "#10B981", bg: "rgba(16,185,129,0.10)", icon: "⬆" },
+  "BUY":        { color: "#34D399", bg: "rgba(52,211,153,0.08)", icon: "↑" },
+  "HOLD":       { color: "#F59E0B", bg: "rgba(245,158,11,0.08)", icon: "→" },
+  "SELL":       { color: "#F87171", bg: "rgba(248,113,113,0.08)", icon: "↓" },
+  "STRONG SELL":{ color: "#EF4444", bg: "rgba(239,68,68,0.08)", icon: "⬇" },
 };
 
 const FACTOR_POOL = [
@@ -105,24 +108,31 @@ let state = {
   currency: "USD",
   history: [],
   news: [],
+  marketMovers: { india: [], us: [] },
   analysis: null,
   aiSource: "simulated",
   staged: null,
+  timeframe: "1y",
 };
 let searchDebounce = null;
+
+const TIMEFRAMES = [
+  { label: "6M", range: "6mo", interval: "1wk" },
+  { label: "1Y", range: "1y", interval: "1wk" },
+  { label: "3Y", range: "3y", interval: "1mo" },
+  { label: "5Y", range: "5y", interval: "1mo" },
+  { label: "10Y", range: "10y", interval: "1mo" },
+];
 
 // ── Lightweight canvas charting (no external dependency) ───────────────
 function setupCanvas(canvas) {
   const dpr = window.devicePixelRatio || 1;
   const parent = canvas.parentElement;
   parent.style.overflow = "hidden";
-
   const cssWidth = canvas.clientWidth || parent.clientWidth;
   const cssHeight = parseInt(canvas.getAttribute("height"), 10) || 200;
-
   canvas.width = Math.max(1, Math.round(cssWidth * dpr));
   canvas.height = Math.max(1, Math.round(cssHeight * dpr));
-
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return { ctx, width: cssWidth, height: cssHeight };
@@ -149,7 +159,7 @@ function drawLineChart(canvas, values, opts = {}) {
   const yAt = (v) => padT + plotH - ((v - niceMin) / niceRange) * plotH;
 
   // Grid + y labels
-  ctx.strokeStyle = "rgba(255,255,255,0.04)";
+  ctx.strokeStyle = "rgba(0,0,0,0.06)";
   ctx.lineWidth = 1;
   ctx.fillStyle = COLORS.textMuted;
   ctx.font = "10px 'JetBrains Mono', monospace";
@@ -216,8 +226,7 @@ function drawLineChart(canvas, values, opts = {}) {
       if (label) ctx.fillText(label, xAt(i), padT + plotH + 5);
     });
   }
-
-  // Save clean snapshot for hover restoration
+  
   canvas._snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
   // Hover interaction
@@ -238,7 +247,7 @@ function drawBarChart(canvas, values, colors, opts = {}) {
   const barGap = 1.5;
   const barW = Math.max(1, plotW / values.length - barGap);
 
-  ctx.strokeStyle = "rgba(255,255,255,0.04)";
+  ctx.strokeStyle = "rgba(0,0,0,0.06)";
   ctx.lineWidth = 1;
   ctx.fillStyle = COLORS.textMuted;
   ctx.font = "10px 'JetBrains Mono', monospace";
@@ -264,8 +273,7 @@ function drawBarChart(canvas, values, colors, opts = {}) {
     roundRectTop(ctx, x, y, barW, h, r);
     ctx.fill();
   });
-
-  // Save clean snapshot for hover restoration
+  
   canvas._snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
   attachHover(canvas, {
@@ -320,10 +328,8 @@ function attachHover(canvas, cfg) {
   };
   const leave = () => {
     tooltip.style.display = "none";
-    // Restore clean chart (remove crosshair)
     if (canvas._snapshot) {
-      const ctx = canvas.getContext("2d");
-      ctx.putImageData(canvas._snapshot, 0, 0);
+      canvas.getContext("2d").putImageData(canvas._snapshot, 0, 0);
     }
   };
 
@@ -346,18 +352,15 @@ function getOrCreateTooltip(canvas) {
 
 function drawCrosshair(canvas, cfg, px, py) {
   const ctx = canvas.getContext("2d");
-  const dpr = window.devicePixelRatio || 1;
-
-  // Restore clean chart snapshot before drawing new crosshair
   if (canvas._snapshot) {
     ctx.putImageData(canvas._snapshot, 0, 0);
   }
-
+  const dpr = window.devicePixelRatio || 1;
   ctx.save();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.beginPath();
   ctx.setLineDash([3, 3]);
-  ctx.strokeStyle = "rgba(255,255,255,0.15)";
+  ctx.strokeStyle = "rgba(0,0,0,0.12)";
   ctx.lineWidth = 1;
   ctx.moveTo(px, cfg.padT);
   ctx.lineTo(px, cfg.padT + cfg.plotH);
@@ -374,10 +377,6 @@ function drawCrosshair(canvas, cfg, px, py) {
 
 // Re-render trigger stored per canvas so we can redraw cleanly on mouseleave
 const lastDraw = new WeakMap();
-function redrawWithoutCrosshair(canvas) {
-  const fn = lastDraw.get(canvas);
-  if (fn) fn();
-}
 
 // ── DOM refs ──────────────────────────────────────────────────────────
 const el = (id) => document.getElementById(id);
@@ -448,6 +447,104 @@ applyBtn.addEventListener("click", () => {
   applyBtn.disabled = true;
 });
 
+// ── Timeframe & Market Movers ──────────────────────────────────────────
+function initTimeframeButtons() {
+  const container = document.querySelector(".tf-buttons-container") || el("priceChart").parentElement;
+  if (!container) return;
+  const buttons = container.querySelectorAll(".tf-btn");
+  if (!buttons.length) return;
+  
+  buttons.forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      buttons.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      const label = btn.textContent.trim();
+      const tf = TIMEFRAMES.find(t => t.label === label) || TIMEFRAMES[1];
+      state.timeframe = tf.range;
+      
+      try {
+        const res = await fetch(`/api/chart/${state.ticker}?range=${tf.range}&interval=${tf.interval}`);
+        if (!res.ok) throw new Error("Failed to fetch timeframe");
+        const data = await res.json();
+        state.history = data.history || [];
+        renderStats();
+        renderPriceChart();
+        updatePriceChangeBadge();
+        renderVolumeChart();
+      } catch (err) {
+        console.error("Timeframe fetch error", err);
+      }
+    });
+  });
+}
+
+function updatePriceChangeBadge() {
+  const badge = el("priceChangeBadge");
+  if (!badge) return;
+  if (state.history.length < 2) {
+    badge.textContent = "—";
+    badge.style.color = COLORS.textMuted;
+    return;
+  }
+  const firstClose = state.history[0].close;
+  const lastClose = state.history[state.history.length - 1].close;
+  const diff = (lastClose - firstClose) / firstClose * 100;
+  const isUp = diff >= 0;
+  badge.textContent = `${isUp ? "▲" : "▼"} ${Math.abs(diff).toFixed(1)}%`;
+  badge.style.color = isUp ? COLORS.green : COLORS.red;
+}
+
+async function loadMarketMovers() {
+  try {
+    const res = await fetch("/api/market-movers");
+    if (!res.ok) throw new Error("Failed");
+    const d = await res.json();
+    state.marketMovers = d;
+    renderMarketMovers();
+  } catch (err) {
+    console.error("Failed to load market movers", err);
+  }
+}
+
+function renderMarketMovers() {
+  const section = el("moversSection");
+  if (!section) return;
+  section.style.display = "block";
+  switchMoversTab("india"); // default
+}
+
+window.switchMoversTab = function(market) {
+  const tabs = document.querySelectorAll(".mover-tab");
+  tabs.forEach(t => t.classList.remove("active"));
+  const activeTab = document.querySelector(`.mover-tab[data-market="${market}"]`);
+  if (activeTab) activeTab.classList.add("active");
+  
+  const list = el("moversList");
+  if (!list) return;
+  const data = state.marketMovers[market] || [];
+  
+  if (!data.length) {
+    list.innerHTML = `<div style="padding:1rem;color:${COLORS.textMuted}">No data available</div>`;
+    return;
+  }
+  
+  list.innerHTML = data.slice(0, 10).map((m, i) => {
+    const retColor = m.yrReturn >= 0 ? COLORS.green : COLORS.red;
+    return `
+      <div class="mover-row" onclick="loadTicker('${m.symbol}')" style="cursor:pointer; display:flex; padding:8px 0; border-bottom:1px solid ${COLORS.border}">
+        <div style="width:30px; color:${COLORS.textMuted}">${i + 1}</div>
+        <div style="flex:1">
+          <span style="color:${COLORS.blue}; font-weight:bold; margin-right:8px">${escapeHtml(m.symbol)}</span>
+          <span style="color:${COLORS.textSec}; font-size:0.9em">${escapeHtml(m.name)}</span>
+        </div>
+        <div style="color:${retColor}; width:80px; text-align:right">${m.yrReturn > 0 ? "+" : ""}${m.yrReturn.toFixed(1)}%</div>
+        <div style="width:80px; text-align:right">${m.price ? fmt(m.price) : "—"}</div>
+      </div>
+    `;
+  }).join("");
+};
+
+
 // ── Data loading ──────────────────────────────────────────────────────
 async function loadTicker(ticker) {
   state.ticker = ticker;
@@ -457,8 +554,9 @@ async function loadTicker(ticker) {
   el("loadingMainText").textContent = `Fetching ${ticker} data…`;
 
   try {
+    const tf = TIMEFRAMES.find(t => t.range === state.timeframe) || TIMEFRAMES[1];
     const [cRes, nRes] = await Promise.all([
-      fetch(`/api/chart/${ticker}`),
+      fetch(`/api/chart/${ticker}?range=${tf.range}&interval=${tf.interval}`),
       fetch(`/api/news/${ticker}`),
     ]);
     if (!cRes.ok) throw new Error("Failed to load chart data");
@@ -481,10 +579,17 @@ async function loadTicker(ticker) {
     renderNews();
 
     await runAiAnalysis();
+    
+    loadMarketMovers();
+    initTimeframeButtons();
+    updatePriceChangeBadge();
+
   } catch (err) {
     el("loadingMain").style.display = "none";
-    el("errorBox").textContent = err.message;
-    el("errorBox").style.display = "block";
+    if (el("errorBox")) {
+      el("errorBox").textContent = err.message;
+      el("errorBox").style.display = "block";
+    }
   }
 }
 
@@ -501,20 +606,20 @@ function computeStats() {
 }
 
 function renderTickerBar() {
-  el("tickerBar").style.display = "flex";
-  el("tickerSymbol").textContent = state.ticker;
-  el("tickerName").textContent = state.stockName;
-  el("tickerCurrency").textContent = state.currency;
+  if (el("tickerBar")) el("tickerBar").style.display = "flex";
+  if (el("tickerSymbol")) el("tickerSymbol").textContent = state.ticker;
+  if (el("tickerName")) el("tickerName").textContent = state.stockName;
+  if (el("tickerCurrency")) el("tickerCurrency").textContent = state.currency;
 }
 
 function renderStats() {
   const stats = computeStats();
   state._stats = stats;
   const items = [
-    { label: "Last Close", value: `${currSym(state.currency)}${fmt(stats.lastClose)}`, color: "var(--text)" },
-    { label: "Monthly", value: stats.monthlyChange != null ? `${stats.monthlyChange >= 0 ? "+" : ""}${stats.monthlyChange}%` : "—", color: stats.monthlyChange >= 0 ? "var(--green)" : "var(--red)" },
-    { label: "1Y Return", value: stats.yrReturn != null ? `${stats.yrReturn >= 0 ? "+" : ""}${stats.yrReturn}%` : "—", color: stats.yrReturn >= 0 ? "var(--green)" : "var(--red)" },
-    { label: "Avg Vol", value: fmtBig(stats.avgVol), color: "var(--text)" },
+    { label: "Last Close", value: `${currSym(state.currency)}${fmt(stats.lastClose)}`, color: COLORS.text },
+    { label: "Monthly", value: stats.monthlyChange != null ? `${stats.monthlyChange >= 0 ? "+" : ""}${stats.monthlyChange}%` : "—", color: stats.monthlyChange >= 0 ? COLORS.green : COLORS.red },
+    { label: "1Y Return", value: stats.yrReturn != null ? `${stats.yrReturn >= 0 ? "+" : ""}${stats.yrReturn}%` : "—", color: stats.yrReturn >= 0 ? COLORS.green : COLORS.red },
+    { label: "Avg Vol", value: fmtBig(stats.avgVol), color: COLORS.text },
   ];
   let html = items.map((it) => `
     <div class="card stat-card">
@@ -526,18 +631,18 @@ function renderStats() {
     <div class="card signal-card" id="signalCard">
       <div class="stat-label">Signal</div>
       <div class="signal-value-row">
-        <span class="stat-value" id="signalValue" style="color:var(--text-muted)">—</span>
+        <span class="stat-value" id="signalValue" style="color:${COLORS.textMuted}">—</span>
       </div>
     </div>
   `;
-  el("statRow").innerHTML = html;
+  if (el("statRow")) el("statRow").innerHTML = html;
 }
 
 function updateSignalStat() {
   const a = state.analysis;
   const card = el("signalCard");
   const valueEl = el("signalValue");
-  if (!a) return;
+  if (!a || !card || !valueEl) return;
   const sig = SIGNAL_META[a.signal] || SIGNAL_META.HOLD;
   card.style.borderColor = sig.color + "33";
   card.classList.add("glow");
@@ -547,23 +652,41 @@ function updateSignalStat() {
 
 function renderPriceChart() {
   const canvas = el("priceChart");
+  if (!canvas) return;
   const data = state.history.map((d) => d.close);
   const dates = state.history.map((d) => d.date);
 
-  // Sparse year labels — only print each year once, every ~5 years
+  const firstClose = data[0];
+  const lastClose = data[data.length - 1];
+  const isUp = lastClose >= firstClose;
+  const chartColor = isUp ? COLORS.green : COLORS.red;
+
   let lastYear = null;
+  let lastMonth = null;
   const xLabels = state.history.map((d) => {
-    const y = new Date(d.date).getFullYear();
-    if (y % 5 === 0 && y !== lastYear) {
-      lastYear = y;
-      return String(y);
+    const dt = new Date(d.date);
+    const y = dt.getFullYear();
+    const m = dt.getMonth();
+    
+    if (state.timeframe === "6mo" || state.timeframe === "1y") {
+      if (m % 2 === 0 && m !== lastMonth) {
+        lastMonth = m;
+        const moStr = dt.toLocaleString('default', { month: 'short' });
+        const yrStr = String(y).slice(-2);
+        return `${moStr} '${yrStr}`;
+      }
+    } else {
+      if (y % 2 === 0 && y !== lastYear) {
+        lastYear = y;
+        return String(y);
+      }
     }
     return "";
   });
 
   drawLineChart(canvas, data, {
-    color: COLORS.blue,
-    fillColor: COLORS.blue,
+    color: chartColor,
+    fillColor: chartColor,
     yFormat: (v) => currSym(state.currency) + fmtBig(v),
     xLabels,
     tooltipFormat: (v, i) => `${dates[i]}  ${currSym(state.currency)}${fmt(v)}`,
@@ -572,6 +695,7 @@ function renderPriceChart() {
 
 function renderVolumeChart() {
   const canvas = el("volumeChart");
+  if (!canvas) return;
   const data = state.history.map((d) => d.volume);
   const dates = state.history.map((d) => d.date);
   const colors = state.history.map((d) => d.close >= (d.open || d.close) ? COLORS.green + "aa" : COLORS.red + "88");
@@ -593,25 +717,29 @@ function renderForecastChart() {
   const lineColor = isUp ? COLORS.green : COLORS.red;
 
   const deltaEl = el("forecastDelta");
-  deltaEl.textContent = `${isUp ? "▲" : "▼"} ${diff}%`;
-  deltaEl.style.color = lineColor;
-  deltaEl.style.background = isUp ? COLORS.greenDim : COLORS.redDim;
+  if (deltaEl) {
+    deltaEl.textContent = `${isUp ? "▲" : "▼"} ${diff}%`;
+    deltaEl.style.color = lineColor;
+    deltaEl.style.background = isUp ? COLORS.greenDim : COLORS.redDim;
+  }
 
   const canvas = el("forecastChart");
-  drawLineChart(canvas, a.forecastCurve, {
-    color: lineColor,
-    fillColor: lineColor,
-    refValue: stats.lastClose,
-    yFormat: (v) => currSym(state.currency) + fmt(v, 0),
-    xLabels: months,
-    tooltipFormat: (v, i) => `${months[i]}  ${currSym(state.currency)}${fmt(v)}`,
-  });
+  if (canvas) {
+    drawLineChart(canvas, a.forecastCurve, {
+      color: lineColor,
+      fillColor: lineColor,
+      refValue: stats.lastClose,
+      yFormat: (v) => currSym(state.currency) + fmt(v, 0),
+      xLabels: months,
+      tooltipFormat: (v, i) => `${months[i]}  ${currSym(state.currency)}${fmt(v)}`,
+    });
+  }
 }
 
 // ── AI analysis ───────────────────────────────────────────────────────
 async function runAiAnalysis() {
-  el("aiLoading").style.display = "flex";
-  el("verdictCard").innerHTML = "";
+  if (el("aiLoading")) el("aiLoading").style.display = "flex";
+  if (el("verdictCard")) el("verdictCard").innerHTML = "";
   const stats = state._stats;
 
   let analysis = null;
@@ -647,7 +775,7 @@ async function runAiAnalysis() {
 
   state.analysis = analysis;
   state.aiSource = source;
-  el("aiLoading").style.display = "none";
+  if (el("aiLoading")) el("aiLoading").style.display = "none";
   renderVerdict();
   updateSignalStat();
   renderForecastChart();
@@ -655,6 +783,8 @@ async function runAiAnalysis() {
 }
 
 function renderVerdict() {
+  const card = el("verdictCard");
+  if (!card) return;
   const a = state.analysis;
   const sig = SIGNAL_META[a.signal] || SIGNAL_META.HOLD;
   const impactfulNews = state.news.filter((n) => n.isImpactful);
@@ -675,33 +805,33 @@ function renderVerdict() {
     `;
   }
 
-  el("verdictCard").innerHTML = `
-    <div class="card verdict-card glow">
+  card.innerHTML = `
+    <div class="card verdict-card glow" style="background: ${COLORS.surface}; color: ${COLORS.text};">
       <div class="verdict-accent" style="background: linear-gradient(90deg, ${sig.color}66 0%, transparent 100%)"></div>
       <div class="verdict-body">
         <div class="verdict-top">
           <div>
-            <div class="verdict-label">
+            <div class="verdict-label" style="color: ${COLORS.textSec}">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${COLORS.blue}" stroke-width="2" stroke-linecap="round">
                 <path d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2h-4a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/>
                 <line x1="10" y1="22" x2="14" y2="22"/>
               </svg>
               AI Verdict
             </div>
-            <div class="verdict-headline">${escapeHtml(a.adviceHeadline)}</div>
+            <div class="verdict-headline" style="color: ${COLORS.text}">${escapeHtml(a.adviceHeadline)}</div>
           </div>
           <div class="verdict-signal-col">
             <span class="signal-pill" style="background:${sig.bg}; color:${sig.color}; box-shadow: 0 0 12px ${sig.color}22;">${sig.icon} ${a.signal}</span>
             <div class="conf-bar-row">
               <div class="conf-bar-track"><div class="conf-bar-fill" style="width:${a.confidence}%; background:${sig.color}"></div></div>
-              <span class="conf-bar-text">${a.confidence}%</span>
+              <span class="conf-bar-text" style="color: ${COLORS.textSec}">${a.confidence}%</span>
             </div>
           </div>
         </div>
-        <p class="verdict-detail">${escapeHtml(a.adviceDetail)}</p>
-        <div class="verdict-action">${escapeHtml(a.adviceAction)}</div>
+        <p class="verdict-detail" style="color: ${COLORS.textSec}">${escapeHtml(a.adviceDetail)}</p>
+        <div class="verdict-action" style="color: ${COLORS.text}">${escapeHtml(a.adviceAction)}</div>
         ${alertHtml}
-        <div class="ai-source-line">
+        <div class="ai-source-line" style="color: ${COLORS.textSec}">
           <span class="ai-source-dot" style="background:${state.aiSource === "gemini" ? COLORS.green : COLORS.amber}"></span>
           ${state.aiSource === "gemini" ? "Gemini AI" : "Simulated model"} · Not financial advice
         </div>
@@ -712,13 +842,14 @@ function renderVerdict() {
 
 function renderFactors() {
   const a = state.analysis;
-  if (!a || !a.factors) return;
+  const flist = el("factorsList");
+  if (!a || !a.factors || !flist) return;
   const typeStyle = {
-    macro: { color: COLORS.blue, bg: "rgba(99,132,255,0.15)" },
+    macro: { color: COLORS.blue, bg: "rgba(79,106,255,0.15)" },
     sentiment: { color: COLORS.amber, bg: COLORS.amberDim },
     financial: { color: COLORS.green, bg: COLORS.greenDim },
   };
-  el("factorsList").innerHTML = a.factors.map((f, i) => {
+  flist.innerHTML = a.factors.map((f, i) => {
     const ts = typeStyle[f.type] || typeStyle.macro;
     const pct = Math.min(Math.abs(f.impact) * 10, 100);
     const pos = f.impact >= 0;
@@ -743,6 +874,7 @@ function renderFactors() {
 function renderNews() {
   const card = el("newsCard");
   const list = el("newsList");
+  if (!card || !list) return;
   if (!state.news.length) { card.style.display = "none"; return; }
   card.style.display = "block";
   list.innerHTML = state.news.map((a) => `
@@ -765,6 +897,7 @@ window.addEventListener("resize", () => {
   resizeDebounce = setTimeout(() => {
     ["priceChart", "volumeChart", "forecastChart"].forEach((id) => {
       const canvas = el(id);
+      if (!canvas) return;
       const fn = lastDraw.get(canvas);
       if (fn) fn();
     });
@@ -772,4 +905,6 @@ window.addEventListener("resize", () => {
 });
 
 // ── Init ──────────────────────────────────────────────────────────────
-loadTicker(state.ticker);
+if (typeof loadTicker === "function") {
+  loadTicker(state.ticker);
+}
