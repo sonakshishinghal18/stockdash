@@ -704,12 +704,15 @@ h1 {
 }
 
 .news-item {
+  display: block;
+  text-decoration: none;
+  color: var(--text);
   padding: 16px;
   background: var(--glass);
   border-radius: var(--r-sm);
   margin-bottom: 12px;
   border-left: 3px solid transparent;
-  transition: background 0.2s ease;
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 .news-item:last-child {
   margin-bottom: 0;
@@ -745,113 +748,7 @@ h1 {
 .news-impact-badge.medium { color: var(--blue); background: var(--blue-glow); }
 .news-impact-badge.low { color: var(--text-sec); background: var(--glass-hover); }
 
-.movers-section {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
 
-.movers-tabs {
-  display: flex;
-  gap: 16px;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 8px;
-}
-
-.movers-tab {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  padding: 4px 8px;
-  position: relative;
-  transition: color 0.2s ease;
-}
-.movers-tab:hover {
-  color: var(--text-sec);
-}
-.movers-tab.active {
-  color: var(--text);
-}
-.movers-tab.active::after {
-  content: '';
-  position: absolute;
-  bottom: -9px;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: var(--blue);
-  border-radius: 2px 2px 0 0;
-}
-
-.movers-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.movers-row {
-  cursor: pointer;
-  transition: background 0.2s ease;
-}
-.movers-row:hover {
-  background: var(--glass-hover);
-}
-.movers-row td {
-  padding: 12px 8px;
-  border-bottom: 1px solid var(--glass);
-  vertical-align: middle;
-}
-.movers-row:last-child td {
-  border-bottom: none;
-}
-
-.movers-rank {
-  width: 24px;
-  height: 24px;
-  background: var(--glass);
-  color: var(--text-sec);
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.movers-symbol {
-  color: var(--blue);
-  font-weight: 600;
-  font-family: var(--mono);
-  font-size: 14px;
-}
-
-.movers-name {
-  font-size: 12px;
-  color: var(--text-sec);
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 120px;
-}
-
-.movers-return {
-  font-weight: 600;
-  font-family: var(--mono);
-  font-size: 14px;
-  text-align: right;
-}
-.movers-return.positive { color: var(--green); }
-.movers-return.negative { color: var(--red); }
-
-.movers-price {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--text-muted);
-  text-align: right;
-}
 
 .grid-2col {
   display: grid;
