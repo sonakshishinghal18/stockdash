@@ -28,8 +28,8 @@ const FACTOR_POOL = [
   { name: "Global Trade Outlook", type: "macro" },
   { name: "Currency Strength", type: "macro" },
   { name: "Social Media Sentiment", type: "sentiment" },
-  { name: "Retail Investor Momentum", type: "sentiment" },
-  { name: "News Polarity", type: "sentiment" },
+  { name: "Institutional Buying", type: "sentiment" },
+  { name: "Retail Investor Interest", type: "sentiment" },
   { name: "Analyst Consensus", type: "sentiment" },
   { name: "Short Interest Ratio", type: "sentiment" },
   { name: "Revenue Growth Rate", type: "financial" },
@@ -51,66 +51,62 @@ function seededRandom(seed) {
   return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; };
 }
 function generatePrediction(ticker, hist) {
-  const r = seededRandom(tickerSeed(ticker));
-  const current = hist.length ? hist[hist.length - 1].close : 100;
-  
-  let endPrice = current;
-  let signal = "HOLD";
-  let conf = 50 + Math.floor(r() * 40);
-  
-  const rand = r();
-  if (rand > 0.8) { endPrice *= (1 + 0.15 + r() * 0.2); signal = "STRONG BUY"; conf += 5; }
-  else if (rand > 0.55) { endPrice *= (1 + 0.05 + r() * 0.1); signal = "BUY"; }
-  else if (rand > 0.35) { endPrice *= (1 - 0.05 + r() * 0.1); signal = "HOLD"; }
-  else if (rand > 0.15) { endPrice *= (1 - 0.15 + r() * 0.1); signal = "SELL"; }
-  else { endPrice *= (1 - 0.3 + r() * 0.15); signal = "STRONG SELL"; conf += 5; }
-  
-  const curve = [current];
-  const step = (endPrice - current) / 12;
-  for (let i = 1; i <= 12; i++) {
-    const noise = current * (r() * 0.06 - 0.03);
-    curve.push(current + step * i + noise);
-  }
-  curve[12] = endPrice; // force end
-  
-  return { signal, confidence: Math.min(99, conf), forecastCurve: curve };
+  const price = hist.length ? hist[hist.length - 1].close : 100;
+  const rng = seededRandom(tickerSeed(ticker));
+  const SIGNALS = ["STRONG BUY", "BUY", "HOLD", "SELL", "STRONG SELL"];
+  const signal = SIGNALS[Math.floor(rng() * SIGNALS.length)];
+  const confidence = Math.round(55 + rng() * 40);
+  const drift = signal.includes("BUY") ? 0.015 : signal.includes("SELL") ? -0.012 : 0.002;
+  const curve = [price];
+  for (let i = 1; i <= 12; i++) curve.push(Math.round(curve[i - 1] * (1 + drift + (rng() - 0.5) * 0.04) * 100) / 100);
+  return { signal, confidence, forecastCurve: curve };
 }
 function generateFactors(ticker) {
-  const r = seededRandom(tickerSeed(ticker) + 123);
-  const shuffled = [...FACTOR_POOL].sort(() => r() - 0.5);
-  return shuffled.slice(0, 6).map(f => ({ ...f, impact: Math.floor(r() * 21) - 10 }));
+  const rng = seededRandom(tickerSeed(ticker) + 99);
+  return [...FACTOR_POOL].sort(() => rng() - 0.5).slice(0, 6).map((f) => ({
+    ...f, desc: `Simulated factor analysis for ${ticker}.`, impact: Math.round((rng() - 0.4) * 16),
+  }));
 }
-function getLaymanAdvice(pred, yrReturn) {
-  const s = pred.signal;
-  if (s === "STRONG BUY") return { adviceHeadline: "Exceptional Growth Setup", adviceDetail: "Metrics indicate a severe undervaluation combined with strong catalysts. The stock is positioned to significantly outperform the market.", adviceAction: "Consider building a heavy position at current levels." };
-  if (s === "BUY") return { adviceHeadline: "Favorable Risk/Reward", adviceDetail: "The company shows steady fundamentals and positive sentiment. Downside appears limited compared to potential upside.", adviceAction: "Accumulate shares on minor pullbacks." };
-  if (s === "SELL") return { adviceHeadline: "Headwinds Increasing", adviceDetail: "Macro conditions and recent performance suggest the stock may struggle to maintain its valuation. Risk outweighs reward.", adviceAction: "Reduce exposure and wait for better entry points." };
-  if (s === "STRONG SELL") return { adviceHeadline: "Critical Deterioration", adviceDetail: "Fundamental deterioration and extremely negative catalysts point to further downside. It is highly overvalued.", adviceAction: "Liquidate position immediately to avoid further losses." };
-  return { adviceHeadline: "Neutral Market Churn", adviceDetail: "The stock is fairly valued. There are no immediate catalysts to drive it significantly in either direction right now.", adviceAction: "Hold existing positions, but do not add new capital yet." };
+function getLaymanAdvice(pred, yrRet) {
+  const { signal, confidence } = pred;
+  if (signal.includes("BUY")) return {
+    adviceHeadline: "Conditions favor accumulating this stock",
+    adviceDetail: `With a ${confidence}% confidence ${signal} signal${yrRet != null ? ` and a ${yrRet > 0 ? "positive" : "negative"} 1-year return of ${yrRet}%` : ""}, the current setup looks constructive. Momentum and sentiment factors lean positive.`,
+    adviceAction: "Consider building a position gradually on any near-term pullback.",
+  };
+  if (signal.includes("SELL")) return {
+    adviceHeadline: "Risk-reward tilts against holding here",
+    adviceDetail: `At ${confidence}% confidence, the model flags ${signal}. ${yrRet != null && yrRet < 0 ? `Already down ${Math.abs(yrRet)}% over 12 months.` : "Deteriorating factors suggest caution."} Downside pressure may persist.`,
+    adviceAction: "Consider trimming exposure or tightening stop-losses.",
+  };
+  return {
+    adviceHeadline: "Neutral stance — wait for clarity",
+    adviceDetail: `The model reads HOLD at ${confidence}% confidence. Neither bulls nor bears hold a decisive edge. Key catalysts ahead could break the stalemate.`,
+    adviceAction: "Hold current positions; avoid adding until direction clarifies.",
+  };
 }
 
-// ── Globals ───────────────────────────────────────────────────────────
-const el = (id) => document.getElementById(id);
-const fmt = (n, d = 2) => Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+// ── Utility ───────────────────────────────────────────────────────────
+const fmt = (n, d = 2) => n != null ? Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }) : "—";
 const fmtBig = (n) => {
+  if (n == null) return "—";
   if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
   if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
   return n.toLocaleString();
 };
-const currSym = (c) => c === "USD" ? "$" : c === "INR" ? "₹" : c + " ";
-const escapeHtml = (s) => String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m]);
+const currSym = (c) => c === "INR" ? "₹" : "$";
+const escapeHtml = (s) => (s || "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
 
-let lastDraw = new WeakMap();
-const state = {
+// ── State ─────────────────────────────────────────────────────────────
+let state = {
   ticker: "AAPL",
-  name: "Apple Inc.",
+  stockName: "",
   currency: "USD",
   history: [],
   news: [],
   analysis: null,
   aiSource: "simulated",
-  _stats: {},
   staged: null,
 };
 let searchDebounce = null;
@@ -119,7 +115,7 @@ let searchDebounce = null;
 function setupCanvas(canvas) {
   const dpr = window.devicePixelRatio || 1;
   
-  // Temporarily remove inline width to allow parent to shrink natively
+  // Temporarily reset inline width to allow parent to shrink/grow natively
   canvas.style.width = "100%"; 
   const cssWidth = canvas.parentElement.clientWidth;
   const cssHeight = parseInt(canvas.getAttribute("height"), 10) || 200;
@@ -141,24 +137,22 @@ function drawLineChart(canvas, values, opts = {}) {
   ctx.clearRect(0, 0, W, H);
   if (!values.length) return;
 
-  const padL = 50, padR = 20, padT = 10, padB = opts.xLabels ? 30 : 10;
+  const padL = 52, padR = 8, padT = 10, padB = 18;
   const plotW = Math.max(1, W - padL - padR);
   const plotH = Math.max(1, H - padT - padB);
 
-  let min = Math.min(...values), max = Math.max(...values);
-  if (min === max) { min *= 0.9; max *= 1.1; }
-  const range = max - min;
-  
-  // Nice numbers for Y axis grid
-  const tickCount = 4;
-  const niceRange = Math.pow(10, Math.floor(Math.log10(range))) * Math.ceil(range / Math.pow(10, Math.floor(Math.log10(range))));
-  const niceMin = Math.floor(min / (niceRange/tickCount)) * (niceRange/tickCount);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = (max - min) || Math.abs(max) || 1;
+  const niceMin = min - range * 0.08;
+  const niceMax = max + range * 0.08;
+  const niceRange = niceMax - niceMin || 1;
 
-  const xAt = (i) => padL + (i / Math.max(1, values.length - 1)) * plotW;
+  const xAt = (i) => padL + (values.length > 1 ? (i / (values.length - 1)) * plotW : plotW / 2);
   const yAt = (v) => padT + plotH - ((v - niceMin) / niceRange) * plotH;
 
-  // Grid & Y labels
-  ctx.strokeStyle = COLORS.border;
+  // Grid + y labels
+  ctx.strokeStyle = "rgba(255,255,255,0.04)";
   ctx.lineWidth = 1;
   ctx.fillStyle = COLORS.textMuted;
   ctx.font = "10px 'JetBrains Mono', monospace";
@@ -241,204 +235,235 @@ function drawBarChart(canvas, values, colors, opts = {}) {
   const plotH = Math.max(1, H - padT - padB);
 
   const max = Math.max(...values, 1);
-  
-  ctx.strokeStyle = COLORS.border;
+  const barGap = 1.5;
+  const barW = Math.max(1, plotW / values.length - barGap);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.04)";
   ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(padL, padT); ctx.lineTo(W - padR, padT);
-  ctx.moveTo(padL, padT + plotH/2); ctx.lineTo(W - padR, padT + plotH/2);
-  ctx.moveTo(padL, padT + plotH); ctx.lineTo(W - padR, padT + plotH);
-  ctx.stroke();
-
-  if (opts.yFormat) {
-    ctx.fillStyle = COLORS.textMuted;
-    ctx.font = "10px 'JetBrains Mono', monospace";
-    ctx.textAlign = "right";
-    ctx.textBaseline = "middle";
-    ctx.fillText(opts.yFormat(max), padL - 8, padT);
-    ctx.fillText(opts.yFormat(max/2), padL - 8, padT + plotH/2);
-    ctx.fillText("0", padL - 8, padT + plotH);
+  ctx.fillStyle = COLORS.textMuted;
+  ctx.font = "10px 'JetBrains Mono', monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  const gridLines = 3;
+  for (let i = 0; i <= gridLines; i++) {
+    const v = (max * i) / gridLines;
+    const y = padT + plotH - (v / max) * plotH;
+    ctx.beginPath();
+    ctx.moveTo(padL, Math.round(y) + 0.5);
+    ctx.lineTo(W - padR, Math.round(y) + 0.5);
+    ctx.stroke();
+    if (opts.yFormat) ctx.fillText(opts.yFormat(v), padL - 8, y);
   }
-
-  const barW = Math.max(1, (plotW / values.length) * 0.7);
-  const xAt = (i) => padL + (i / Math.max(1, values.length - 1)) * plotW;
-  const yAt = (v) => padT + plotH - (v / max) * plotH;
 
   values.forEach((v, i) => {
+    const x = padL + i * (plotW / values.length) + barGap / 2;
     const h = (v / max) * plotH;
-    const x = xAt(i) - barW / 2;
     const y = padT + plotH - h;
     ctx.fillStyle = colors[i] || COLORS.blue;
-    ctx.fillRect(x, y, barW, h);
+    const r = Math.min(2, barW / 2);
+    roundRectTop(ctx, x, y, barW, h, r);
+    ctx.fill();
   });
 
-  attachHover(canvas, { xAt, yAt, values, padL, padT, plotW, plotH, tooltipFormat: opts.tooltipFormat, isBar: true });
+  attachHover(canvas, {
+    xAt: (i) => padL + i * (plotW / values.length) + (plotW / values.length) / 2,
+    yAt: (v) => padT + plotH - (v / max) * plotH,
+    values, padL, padT, plotW, plotH,
+    tooltipFormat: opts.tooltipFormat, color: COLORS.blue, isBar: true,
+  });
 }
 
-let activeTooltip = null;
+function roundRectTop(ctx, x, y, w, h, r) {
+  if (h <= 0) { ctx.beginPath(); return; }
+  r = Math.min(r, w / 2, h);
+  ctx.beginPath();
+  ctx.moveTo(x, y + h);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h);
+  ctx.closePath();
+}
+
+const hoverState = new WeakMap();
 function attachHover(canvas, cfg) {
-  if (canvas._hoverHandler) canvas.removeEventListener("mousemove", canvas._hoverHandler);
-  if (canvas._leaveHandler) canvas.removeEventListener("mouseleave", canvas._leaveHandler);
-  
-  if (!activeTooltip) {
-    activeTooltip = document.createElement("div");
-    activeTooltip.className = "chart-tooltip";
-    document.body.appendChild(activeTooltip);
-  }
+  // Remove any previous listener for this canvas
+  const prev = hoverState.get(canvas);
+  if (prev) canvas.removeEventListener("mousemove", prev.move), canvas.removeEventListener("mouseleave", prev.leave);
 
-  const tt = activeTooltip;
-  const { xAt, yAt, values, padL, padT, plotW, plotH, tooltipFormat, isBar, color } = cfg;
+  const tooltip = getOrCreateTooltip(canvas);
 
-  canvas._hoverHandler = (e) => {
+  const move = (e) => {
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    if (x < padL || x > padL + plotW) { tt.style.display = "none"; return; }
-    
-    const idx = Math.max(0, Math.min(values.length - 1, Math.round(((x - padL) / plotW) * (values.length - 1))));
-    const vx = xAt(idx);
-    const vy = isBar ? yAt(values[idx]) : yAt(values[idx]);
-    
-    // Draw crosshair overlay
-    const fn = lastDraw.get(canvas);
-    if (fn) fn(); // redraw base
-    const ctx = canvas.getContext("2d");
-    ctx.save();
-    ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
-    ctx.strokeStyle = COLORS.textMuted;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath();
-    ctx.moveTo(vx, padT); ctx.lineTo(vx, padT + plotH);
-    ctx.stroke();
-    if (!isBar) {
-      ctx.beginPath();
-      ctx.arc(vx, vy, 4, 0, Math.PI * 2);
-      ctx.fillStyle = COLORS.bg;
-      ctx.fill();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
-      ctx.stroke();
+    const mx = e.clientX - rect.left;
+    const n = cfg.values.length;
+    if (n === 0) return;
+    // Find nearest index
+    let idx = 0, best = Infinity;
+    for (let i = 0; i < n; i++) {
+      const d = Math.abs(cfg.xAt(i) - mx);
+      if (d < best) { best = d; idx = i; }
     }
-    ctx.restore();
+    const v = cfg.values[idx];
+    const px = cfg.xAt(idx), py = cfg.yAt(v);
 
-    tt.style.display = "block";
-    tt.textContent = tooltipFormat(values[idx], idx);
-    const ttX = rect.left + vx + window.scrollX;
-    const ttY = rect.top + padT - 10 + window.scrollY;
-    tt.style.left = ttX + "px";
-    tt.style.top = (ttY - 20) + "px";
+    // Redraw base chart then overlay crosshair (cheap: caller charts are small)
+    tooltip.style.display = "block";
+    tooltip.style.left = Math.min(Math.max(px, 40), canvas.clientWidth - 40) + "px";
+    tooltip.style.top = "2px";
+    tooltip.textContent = cfg.tooltipFormat ? cfg.tooltipFormat(v, idx) : String(v);
+
+    drawCrosshair(canvas, cfg, px, py);
+  };
+  const leave = () => {
+    tooltip.style.display = "none";
+    redrawWithoutCrosshair(canvas, cfg);
   };
 
-  canvas._leaveHandler = () => {
-    tt.style.display = "none";
-    const fn = lastDraw.get(canvas);
-    if (fn) fn();
-  };
-
-  canvas.addEventListener("mousemove", canvas._hoverHandler);
-  canvas.addEventListener("mouseleave", canvas._leaveHandler);
+  canvas.addEventListener("mousemove", move);
+  canvas.addEventListener("mouseleave", leave);
+  hoverState.set(canvas, { move, leave, cfg });
 }
 
+function getOrCreateTooltip(canvas) {
+  let wrap = canvas.parentElement;
+  if (getComputedStyle(wrap).position === "static") wrap.style.position = "relative";
+  let tip = wrap.querySelector(".chart-tooltip");
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.className = "chart-tooltip";
+    wrap.appendChild(tip);
+  }
+  return tip;
+}
 
-// ── UI Interactions ───────────────────────────────────────────────────
+function drawCrosshair(canvas, cfg, px, py) {
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.beginPath();
+  ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = "rgba(255,255,255,0.15)";
+  ctx.lineWidth = 1;
+  ctx.moveTo(px, cfg.padT);
+  ctx.lineTo(px, cfg.padT + cfg.plotH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  if (!cfg.isBar) {
+    ctx.beginPath();
+    ctx.fillStyle = cfg.color;
+    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
 
-el("searchInput").addEventListener("input", (e) => {
-  const val = e.target.value.trim();
-  el("stagedDot").style.display = "none";
-  if (val.length === 0) { el("searchDropdown").style.display = "none"; return; }
-  
+// Re-render trigger stored per canvas so we can redraw cleanly on mouseleave
+const lastDraw = new WeakMap();
+function redrawWithoutCrosshair(canvas) {
+  const fn = lastDraw.get(canvas);
+  if (fn) fn();
+}
+
+// ── DOM refs ──────────────────────────────────────────────────────────
+const el = (id) => document.getElementById(id);
+const searchInput = el("searchInput");
+const searchDropdown = el("searchDropdown");
+const searchInputWrap = document.querySelector(".search-input-wrap");
+const stagedDot = el("stagedDot");
+const applyBtn = el("applyBtn");
+
+// ── Search ────────────────────────────────────────────────────────────
+searchInput.addEventListener("input", (e) => {
+  const val = e.target.value;
   clearTimeout(searchDebounce);
+  state.staged = null;
+  stagedDot.classList.remove("show");
+  applyBtn.classList.remove("active");
+  applyBtn.disabled = true;
+  if (val.length < 1) { searchDropdown.classList.remove("show"); return; }
   searchDebounce = setTimeout(async () => {
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(val)}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      renderSearchDropdown(data.results);
-    } catch {}
-  }, 300);
+      const r = await fetch(`/api/search?q=${encodeURIComponent(val)}`);
+      const d = await r.json();
+      renderSearchResults(d.results || []);
+    } catch { renderSearchResults([]); }
+  }, 280);
+});
+searchInput.addEventListener("focus", () => {
+  searchInputWrap.classList.add("focused");
+  if (searchDropdown.children.length) searchDropdown.classList.add("show");
+});
+searchInput.addEventListener("blur", () => searchInputWrap.classList.remove("focused"));
+document.addEventListener("mousedown", (e) => {
+  if (!el("searchWrap").contains(e.target)) searchDropdown.classList.remove("show");
 });
 
-el("searchInput").addEventListener("focus", () => {
-  if (el("searchDropdown").innerHTML.trim()) el("searchDropdown").style.display = "block";
-});
-
-document.addEventListener("click", (e) => {
-  if (!el("searchWrap").contains(e.target)) el("searchDropdown").style.display = "none";
-});
-
-function renderSearchDropdown(results) {
-  const drop = el("searchDropdown");
-  if (!results.length) {
-    drop.innerHTML = `<div class="search-item" style="opacity:0.5; cursor:default">No results found</div>`;
-  } else {
-    drop.innerHTML = results.map(r => `
-      <div class="search-item" data-sym="${r.symbol}" data-name="${escapeHtml(r.name)}" data-exch="${r.exchange}">
-        <div>
-          <div class="sym">${r.symbol}</div>
-          <div class="name">${escapeHtml(r.name)}</div>
-        </div>
-        <div class="exch">${r.exchange}</div>
+function renderSearchResults(results) {
+  searchDropdown.innerHTML = results.map((r) => `
+    <div class="search-result" data-symbol="${escapeHtml(r.symbol)}" data-name="${escapeHtml(r.name)}">
+      <div class="search-result-left">
+        <span class="search-result-symbol">${escapeHtml(r.symbol)}</span>
+        <span class="search-result-name">${escapeHtml(r.name)}</span>
       </div>
-    `).join("");
-    drop.querySelectorAll(".search-item").forEach(item => {
-      item.addEventListener("click", () => {
-        state.staged = { symbol: item.dataset.sym, name: item.dataset.name };
-        el("searchInput").value = item.dataset.sym;
-        drop.style.display = "none";
-        el("stagedDot").style.display = "block";
-        el("applyBtn").disabled = false;
-        el("applyBtn").classList.add("pulse-glow");
-      });
+      <span class="search-result-exchange">${escapeHtml(r.exchange)}</span>
+    </div>
+  `).join("");
+  searchDropdown.classList.toggle("show", results.length > 0);
+  searchDropdown.querySelectorAll(".search-result").forEach((node) => {
+    node.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const symbol = node.dataset.symbol;
+      state.staged = symbol;
+      searchInput.value = symbol;
+      searchDropdown.classList.remove("show");
+      stagedDot.classList.add("show");
+      applyBtn.classList.add("active");
+      applyBtn.disabled = false;
     });
-  }
-  drop.style.display = "block";
+  });
 }
 
-el("applyBtn").addEventListener("click", () => {
-  if (state.staged) {
-    loadTicker(state.staged.symbol);
-    el("applyBtn").disabled = true;
-    el("applyBtn").classList.remove("pulse-glow");
-    el("stagedDot").style.display = "none";
-    state.staged = null;
-  }
+applyBtn.addEventListener("click", () => {
+  if (!state.staged) return;
+  loadTicker(state.staged);
+  state.staged = null;
+  searchInput.value = "";
+  stagedDot.classList.remove("show");
+  applyBtn.classList.remove("active");
+  applyBtn.disabled = true;
 });
 
-// ── Main Data Fetching ────────────────────────────────────────────────
-
+// ── Data loading ──────────────────────────────────────────────────────
 async function loadTicker(ticker) {
+  state.ticker = ticker;
   el("content").style.display = "none";
   el("errorBox").style.display = "none";
-  el("tickerBar").style.display = "none";
-  el("loadingMainText").textContent = `Loading ${ticker} data…`;
   el("loadingMain").style.display = "flex";
+  el("loadingMainText").textContent = `Fetching ${ticker} data…`;
 
   try {
-    const [chartRes, newsRes] = await Promise.all([
+    const [cRes, nRes] = await Promise.all([
       fetch(`/api/chart/${ticker}`),
-      fetch(`/api/news/${ticker}`)
+      fetch(`/api/news/${ticker}`),
     ]);
+    if (!cRes.ok) throw new Error("Failed to load chart data");
+    const cData = await cRes.json();
+    const nData = nRes.ok ? await nRes.json() : { articles: [] };
 
-    if (!chartRes.ok) throw new Error(chartRes.status === 404 ? `Ticker ${ticker} not found.` : `Data error for ${ticker}`);
-    
-    const chartData = await chartRes.json();
-    const newsData = newsRes.ok ? await newsRes.json() : { articles: [] };
-
-    state.ticker = chartData.ticker;
-    state.name = chartData.name || chartData.ticker;
-    state.currency = chartData.currency || "USD";
-    state.history = chartData.history;
-    state.news = newsData.articles;
-    state._stats = computeStats();
+    state.history = cData.history || [];
+    state.stockName = cData.name || ticker;
+    state.currency = cData.currency || "USD";
+    state.news = nData.articles || [];
 
     el("loadingMain").style.display = "none";
-    el("tickerSymbol").textContent = state.ticker;
-    el("tickerName").textContent = state.name;
-    el("tickerCurrency").textContent = state.currency;
-    el("tickerBar").style.display = "flex";
-    el("content").style.display = "block";
+    renderTickerBar();
+    if (!state.history.length) throw new Error("No price history available");
 
-    renderStatRow();
+    el("content").style.display = "flex";
+    renderStats();
     renderPriceChart();
     renderVolumeChart();
     renderNews();
@@ -463,38 +488,42 @@ function computeStats() {
   return { lastClose: last.close, monthlyChange, yrReturn, avgVol };
 }
 
-function renderStatRow() {
-  const s = state._stats;
-  const mcColor = s.monthlyChange >= 0 ? COLORS.green : COLORS.red;
-  const yrColor = s.yrReturn >= 0 ? COLORS.green : COLORS.red;
-  
-  el("statRow").innerHTML = `
-    <div class="stat-card">
-      <div class="stat-title">Current Price</div>
-      <div class="stat-value">${currSym(state.currency)}${fmt(s.lastClose)}</div>
+function renderTickerBar() {
+  el("tickerBar").style.display = "flex";
+  el("tickerSymbol").textContent = state.ticker;
+  el("tickerName").textContent = state.stockName;
+  el("tickerCurrency").textContent = state.currency;
+}
+
+function renderStats() {
+  const stats = computeStats();
+  state._stats = stats;
+  const items = [
+    { label: "Last Close", value: `${currSym(state.currency)}${fmt(stats.lastClose)}`, color: "var(--text)" },
+    { label: "Monthly", value: stats.monthlyChange != null ? `${stats.monthlyChange >= 0 ? "+" : ""}${stats.monthlyChange}%` : "—", color: stats.monthlyChange >= 0 ? "var(--green)" : "var(--red)" },
+    { label: "1Y Return", value: stats.yrReturn != null ? `${stats.yrReturn >= 0 ? "+" : ""}${stats.yrReturn}%` : "—", color: stats.yrReturn >= 0 ? "var(--green)" : "var(--red)" },
+    { label: "Avg Vol", value: fmtBig(stats.avgVol), color: "var(--text)" },
+  ];
+  let html = items.map((it) => `
+    <div class="card stat-card">
+      <div class="stat-label">${it.label}</div>
+      <div class="stat-value" style="color:${it.color}">${it.value}</div>
     </div>
-    <div class="stat-card">
-      <div class="stat-title">Monthly Change</div>
-      <div class="stat-value" style="color:${mcColor}">${s.monthlyChange >= 0 ? "+" : ""}${s.monthlyChange}%</div>
-    </div>
-    <div class="stat-card" id="signalStatCard">
-      <div class="stat-title">AI Signal</div>
-      <div class="stat-value" id="signalValue">--</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-title">1Y Return</div>
-      <div class="stat-value" style="color:${yrColor}">${s.yrReturn >= 0 ? "+" : ""}${s.yrReturn}%</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-title">Avg Volume</div>
-      <div class="stat-value">${fmtBig(s.avgVol)}</div>
+  `).join("");
+  html += `
+    <div class="card signal-card" id="signalCard">
+      <div class="stat-label">Signal</div>
+      <div class="signal-value-row">
+        <span class="stat-value" id="signalValue" style="color:var(--text-muted)">—</span>
+      </div>
     </div>
   `;
+  el("statRow").innerHTML = html;
 }
 
 function updateSignalStat() {
   const a = state.analysis;
-  const card = el("signalStatCard");
+  const card = el("signalCard");
   const valueEl = el("signalValue");
   if (!a) return;
   const sig = SIGNAL_META[a.signal] || SIGNAL_META.HOLD;
