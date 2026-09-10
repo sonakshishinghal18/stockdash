@@ -593,16 +593,30 @@ async function loadTicker(ticker) {
   }
 }
 
+function getMonthlyData(history) {
+  const map = new Map();
+  for (const d of history) {
+    const month = d.date.substring(0, 7);
+    if (!map.has(month)) map.set(month, { date: month, open: d.open, close: d.close, volume: 0 });
+    const m = map.get(month);
+    m.close = d.close;
+    m.volume += d.volume || 0;
+  }
+  return Array.from(map.values());
+}
+
 function computeStats() {
   const h = state.history;
-  if (!h.length) return {};
+  const mh = getMonthlyData(h);
+  if (!h.length || !mh.length) return {};
   const last = h[h.length - 1];
-  const prev = h.length > 1 ? h[h.length - 2] : last;
-  const yr = h.length > 12 ? h[h.length - 13] : h[0];
-  const monthlyChange = prev.close ? parseFloat(((last.close - prev.close) / prev.close * 100).toFixed(2)) : null;
-  const yrReturn = yr.close ? parseFloat(((last.close - yr.close) / yr.close * 100).toFixed(2)) : null;
-  const avgVol = Math.round(h.slice(-12).reduce((s, d) => s + (d.volume || 0), 0) / Math.min(h.length, 12));
-  return { lastClose: last.close, monthlyChange, yrReturn, avgVol };
+  const mlast = mh[mh.length - 1];
+  const mprev = mh.length > 1 ? mh[mh.length - 2] : mlast;
+  const myr = mh.length > 12 ? mh[mh.length - 13] : mh[0];
+  const monthlyChange = mprev.close ? parseFloat(((last.close - mprev.close) / mprev.close * 100).toFixed(2)) : null;
+  const yrReturn = myr.close ? parseFloat(((last.close - myr.close) / myr.close * 100).toFixed(2)) : null;
+  const avgVol = Math.round(mh.slice(-12).reduce((s, d) => s + d.volume, 0) / Math.min(mh.length, 12));
+  return { lastClose: last.close, lastDate: last.date.substring(0, 7), monthlyChange, yrReturn, avgVol };
 }
 
 function renderTickerBar() {
@@ -616,15 +630,16 @@ function renderStats() {
   const stats = computeStats();
   state._stats = stats;
   const items = [
-    { label: "Last Close", value: `${currSym(state.currency)}${fmt(stats.lastClose)}`, color: COLORS.text },
+    { label: "📍 Last Close", value: `${currSym(state.currency)}${fmt(stats.lastClose)}`, color: COLORS.text, sub: stats.lastDate },
     { label: "Monthly", value: stats.monthlyChange != null ? `${stats.monthlyChange >= 0 ? "+" : ""}${stats.monthlyChange}%` : "—", color: stats.monthlyChange >= 0 ? COLORS.green : COLORS.red },
     { label: "1Y Return", value: stats.yrReturn != null ? `${stats.yrReturn >= 0 ? "+" : ""}${stats.yrReturn}%` : "—", color: stats.yrReturn >= 0 ? COLORS.green : COLORS.red },
-    { label: "Avg Vol", value: fmtBig(stats.avgVol), color: COLORS.text },
+    { label: "Monthly Vol", value: fmtBig(stats.avgVol), color: COLORS.text },
   ];
   let html = items.map((it) => `
     <div class="card stat-card">
       <div class="stat-label">${it.label}</div>
       <div class="stat-value" style="color:${it.color}">${it.value}</div>
+      ${it.sub ? `<div style="font-size:12px; color:${COLORS.textSec}; margin-top:2px; font-family:var(--mono)">${it.sub}</div>` : ""}
     </div>
   `).join("");
   html += `
@@ -695,10 +710,11 @@ function renderPriceChart() {
 
 function renderVolumeChart() {
   const canvas = el("volumeChart");
-  if (!canvas) return;
-  const data = state.history.map((d) => d.volume);
-  const dates = state.history.map((d) => d.date);
-  const colors = state.history.map((d) => d.close >= (d.open || d.close) ? COLORS.green + "aa" : COLORS.red + "88");
+  if (!canvas || !state.history.length) return;
+  const mh = getMonthlyData(state.history);
+  const data = mh.map((d) => d.volume);
+  const dates = mh.map((d) => d.date);
+  const colors = mh.map((d) => d.close >= (d.open || d.close) ? COLORS.green + "aa" : COLORS.red + "88");
 
   drawBarChart(canvas, data, colors, {
     yFormat: (v) => fmtBig(v),
