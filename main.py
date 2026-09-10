@@ -31,23 +31,8 @@ EXCHANGE_LABELS = {
     "PCX": "NYSE", "ASE": "AMEX",
 }
 
-INDIA_WATCHLIST = [
-    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
-    "BAJFINANCE.NS", "BHARTIARTL.NS", "SBIN.NS", "ITC.NS", "HINDUNILVR.NS",
-    "LT.NS", "KOTAKBANK.NS", "MARUTI.NS", "TITAN.NS", "AXISBANK.NS",
-    "SUNPHARMA.NS", "TATAMOTORS.NS", "ONGC.NS", "NTPC.NS", "ADANIPORTS.NS",
-    "WIPRO.NS", "POWERGRID.NS", "HCLTECH.NS", "ULTRACEMCO.NS", "NESTLEIND.NS",
-    "TATASTEEL.NS", "JSWSTEEL.NS", "TECHM.NS", "DRREDDY.NS", "BAJAJFINSV.NS",
-]
 
-US_WATCHLIST = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
-    "UNH", "JNJ", "V", "XOM", "JPM", "WMT", "PG", "MA", "HD", "CVX",
-    "MRK", "ABBV", "PEP", "KO", "COST", "AVGO", "LLY", "TMO", "MCD",
-    "ACN", "NFLX", "CRM",
-]
 
-_market_movers_cache = {"data": None, "timestamp": None}
 
 # ── Search ─────────────────────────────────────────────────────────────
 
@@ -180,9 +165,14 @@ async def get_news(ticker: str):
     
     combined = y_news + g_news
     
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    
     deduped = []
     seen = []
     for item in combined:
+        if item["date"] < cutoff:
+            continue
+            
         title_lower = item["title"].lower()
         is_dup = any(title_lower in s or s in title_lower for s in seen)
         if not is_dup:
@@ -215,66 +205,6 @@ async def get_news(ticker: str):
         
     return {"articles": articles}
 
-# ── Market Movers ──────────────────────────────────────────────────────
-
-def get_market_movers_data():
-    all_tickers = INDIA_WATCHLIST + US_WATCHLIST
-    data = yf.download(all_tickers, period="1y", group_by="ticker", auto_adjust=False, prepost=False, threads=True)
-    
-    india_res = []
-    us_res = []
-    
-    def process_watchlist(watchlist, res_list, default_curr):
-        for t in watchlist:
-            try:
-                t_data = data[t] if len(all_tickers) > 1 else data
-                t_data = t_data.dropna(subset=['Close'])
-                if len(t_data) < 2:
-                    continue
-                    
-                first_close = float(t_data['Close'].iloc[0])
-                last_close = float(t_data['Close'].iloc[-1])
-                ret_1y = ((last_close - first_close) / first_close) * 100
-                
-                info = yf.Ticker(t).fast_info
-                curr = info.get("currency", default_curr)
-                
-                name = t.split(".")[0]
-                
-                res_list.append({
-                    "symbol": t,
-                    "name": name,
-                    "return1y": round(ret_1y, 2),
-                    "price": round(last_close, 2),
-                    "currency": curr
-                })
-            except Exception:
-                pass
-
-    process_watchlist(INDIA_WATCHLIST, india_res, "INR")
-    process_watchlist(US_WATCHLIST, us_res, "USD")
-            
-    india_res.sort(key=lambda x: x["return1y"], reverse=True)
-    us_res.sort(key=lambda x: x["return1y"], reverse=True)
-    
-    return {
-        "india": india_res[:10],
-        "us": us_res[:10],
-        "cachedAt": datetime.now(timezone.utc).isoformat()
-    }
-
-@app.get("/api/market-movers")
-async def get_market_movers():
-    now = datetime.now(timezone.utc)
-    cached_ts = _market_movers_cache["timestamp"]
-    if cached_ts and (now - cached_ts) < timedelta(hours=24):
-        return _market_movers_cache["data"]
-        
-    data = await asyncio.to_thread(get_market_movers_data)
-    _market_movers_cache["data"] = data
-    _market_movers_cache["timestamp"] = now
-    
-    return data
 
 # ── Gemini AI analysis endpoint ────────────────────────────────────────
 
