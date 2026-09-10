@@ -114,13 +114,15 @@ let searchDebounce = null;
 // ── Lightweight canvas charting (no external dependency) ───────────────
 function setupCanvas(canvas) {
   const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.parentElement.getBoundingClientRect();
-  const cssWidth = rect.width;
+  const parent = canvas.parentElement;
+  parent.style.overflow = "hidden";
+
+  const cssWidth = canvas.clientWidth || parent.clientWidth;
   const cssHeight = parseInt(canvas.getAttribute("height"), 10) || 200;
-  
+
   canvas.width = Math.max(1, Math.round(cssWidth * dpr));
   canvas.height = Math.max(1, Math.round(cssHeight * dpr));
-  
+
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return { ctx, width: cssWidth, height: cssHeight };
@@ -215,6 +217,9 @@ function drawLineChart(canvas, values, opts = {}) {
     });
   }
 
+  // Save clean snapshot for hover restoration
+  canvas._snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
   // Hover interaction
   attachHover(canvas, { xAt, yAt, values, padL, padT, plotW, plotH, tooltipFormat: opts.tooltipFormat, color: opts.color || COLORS.blue });
 }
@@ -260,6 +265,9 @@ function drawBarChart(canvas, values, colors, opts = {}) {
     ctx.fill();
   });
 
+  // Save clean snapshot for hover restoration
+  canvas._snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
   attachHover(canvas, {
     xAt: (i) => padL + i * (plotW / values.length) + (plotW / values.length) / 2,
     yAt: (v) => padT + plotH - (v / max) * plotH,
@@ -303,7 +311,6 @@ function attachHover(canvas, cfg) {
     const v = cfg.values[idx];
     const px = cfg.xAt(idx), py = cfg.yAt(v);
 
-    // Redraw base chart then overlay crosshair (cheap: caller charts are small)
     tooltip.style.display = "block";
     tooltip.style.left = Math.min(Math.max(px, 40), canvas.clientWidth - 40) + "px";
     tooltip.style.top = "2px";
@@ -313,7 +320,11 @@ function attachHover(canvas, cfg) {
   };
   const leave = () => {
     tooltip.style.display = "none";
-    redrawWithoutCrosshair(canvas, cfg);
+    // Restore clean chart (remove crosshair)
+    if (canvas._snapshot) {
+      const ctx = canvas.getContext("2d");
+      ctx.putImageData(canvas._snapshot, 0, 0);
+    }
   };
 
   canvas.addEventListener("mousemove", move);
@@ -336,6 +347,12 @@ function getOrCreateTooltip(canvas) {
 function drawCrosshair(canvas, cfg, px, py) {
   const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
+
+  // Restore clean chart snapshot before drawing new crosshair
+  if (canvas._snapshot) {
+    ctx.putImageData(canvas._snapshot, 0, 0);
+  }
+
   ctx.save();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.beginPath();
@@ -533,6 +550,7 @@ function renderPriceChart() {
   const data = state.history.map((d) => d.close);
   const dates = state.history.map((d) => d.date);
 
+  // Sparse year labels — only print each year once, every ~5 years
   let lastYear = null;
   const xLabels = state.history.map((d) => {
     const y = new Date(d.date).getFullYear();
