@@ -2,9 +2,11 @@ import os
 import json
 import httpx
 import asyncio
+import email.utils
 import yfinance as yf
 from yahooquery import search
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import xml.etree.ElementTree as ET
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -16,8 +18,38 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-3.8-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
-# ── Yahoo Finance wrapper endpoints ────────────────────────────────────
-# We use yahooquery for search and yfinance for data to bypass 403/429 blocks on Render.
+ALLOWED_EXCHANGES = {
+    # India
+    "NSI", "NSE", "BSE", "BOM",
+    # US  
+    "NYQ", "NYSE", "NMS", "NASDAQ", "NGM", "NAS", "PCX", "ASE", "AMEX"
+}
+
+EXCHANGE_LABELS = {
+    "NSI": "NSE", "BSE": "BSE", "BOM": "BSE",
+    "NYQ": "NYSE", "NMS": "NASDAQ", "NGM": "NASDAQ", "NAS": "NASDAQ",
+    "PCX": "NYSE", "ASE": "AMEX",
+}
+
+INDIA_WATCHLIST = [
+    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
+    "BAJFINANCE.NS", "BHARTIARTL.NS", "SBIN.NS", "ITC.NS", "HINDUNILVR.NS",
+    "LT.NS", "KOTAKBANK.NS", "MARUTI.NS", "TITAN.NS", "AXISBANK.NS",
+    "SUNPHARMA.NS", "TATAMOTORS.NS", "ONGC.NS", "NTPC.NS", "ADANIPORTS.NS",
+    "WIPRO.NS", "POWERGRID.NS", "HCLTECH.NS", "ULTRACEMCO.NS", "NESTLEIND.NS",
+    "TATASTEEL.NS", "JSWSTEEL.NS", "TECHM.NS", "DRREDDY.NS", "BAJAJFINSV.NS",
+]
+
+US_WATCHLIST = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
+    "UNH", "JNJ", "V", "XOM", "JPM", "WMT", "PG", "MA", "HD", "CVX",
+    "MRK", "ABBV", "PEP", "KO", "COST", "AVGO", "LLY", "TMO", "MCD",
+    "ACN", "NFLX", "CRM",
+]
+
+_market_movers_cache = {"data": None, "timestamp": None}
+
+# ── Search ─────────────────────────────────────────────────────────────
 
 @app.get("/api/search")
 async def search_stocks(q: str = Query(..., min_length=1)):
@@ -30,21 +62,22 @@ async def search_stocks(q: str = Query(..., min_length=1)):
     data = await asyncio.to_thread(_search)
     results = []
     for q_item in data.get("quotes", []):
-        if q_item.get("quoteType") in ("EQUITY", "ETF"):
+        excl = q_item.get("exchange", "")
+        if q_item.get("quoteType") in ("EQUITY", "ETF") and excl in ALLOWED_EXCHANGES:
             results.append({
                 "symbol": q_item.get("symbol", ""),
                 "name": q_item.get("shortname") or q_item.get("longname", ""),
-                "exchange": q_item.get("exchange", ""),
+                "exchange": EXCHANGE_LABELS.get(excl, excl),
                 "type": q_item.get("quoteType", ""),
             })
     return {"results": results}
 
+# ── Chart ──────────────────────────────────────────────────────────────
 
 @app.get("/api/chart/{ticker}")
-async def get_chart(ticker: str, interval: str = "1mo", range: str = "20y"):
+async def get_chart(ticker: str, interval: str = "1wk", range: str = "1y"):
     def _get_history():
         tkr = yf.Ticker(ticker)
-        # We need the currency; info is blocked on Render, so use fast_info fallback
         try:
             currency = tkr.fast_info.get("currency", "USD")
         except Exception:
@@ -73,18 +106,90 @@ async def get_chart(ticker: str, interval: str = "1mo", range: str = "20y"):
 
     return {"ticker": ticker, "name": ticker, "currency": currency, "history": history}
 
+# ── News ───────────────────────────────────────────────────────────────
+
+async def fetch_yahoo_news(ticker: str):
+    def _get_news():
+        return yf.Ticker(ticker).news
+    
+    try:
+        news_items = await asyncio.to_thread(_get_news)
+        cutoff_ts = (datetime.utcnow() - timedelta(days=90)).timestamp()
+        
+        parsed = []
+        for item in news_items:
+            pub_ts = item.get("providerPublishTime", 0)
+            if pub_ts < cutoff_ts:
+                continue
+
+            dt = datetime.fromtimestamp(pub_ts, tz=timezone.utc) if pub_ts else datetime.now(timezone.utc)
+            
+            parsed.append({
+                "title": item.get("title", ""),
+                "link": item.get("link", ""),
+                "publisher": item.get("publisher", ""),
+                "date": dt
+            })
+        return parsed
+    except Exception:
+        return []
+
+async def fetch_google_news(ticker: str):
+    url = f"https://news.google.com/rss/search?q={ticker}+stock&hl=en"
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, follow_redirects=True, timeout=10.0)
+            if resp.status_code != 200:
+                return []
+            
+            root = ET.fromstring(resp.text)
+            parsed = []
+            for item in root.findall(".//item"):
+                title = item.findtext("title", "")
+                link = item.findtext("link", "")
+                pubDate_str = item.findtext("pubDate", "")
+                source_elem = item.find("source")
+                publisher = source_elem.text if source_elem is not None else ""
+                
+                dt = datetime.now(timezone.utc)
+                if pubDate_str:
+                    try:
+                        parsed_tuple = email.utils.parsedate_tz(pubDate_str)
+                        if parsed_tuple:
+                            ts = email.utils.mktime_tz(parsed_tuple)
+                            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                    except Exception:
+                        pass
+                
+                parsed.append({
+                    "title": title,
+                    "link": link,
+                    "publisher": publisher,
+                    "date": dt
+                })
+            return parsed
+    except Exception:
+        return []
 
 @app.get("/api/news/{ticker}")
 async def get_news(ticker: str):
-    def _get_news():
-        return yf.Ticker(ticker).news
-
-    try:
-        news_items = await asyncio.to_thread(_get_news)
-    except Exception:
-        return {"articles": []}
-
-    cutoff_ts = (datetime.utcnow() - timedelta(days=90)).timestamp()
+    y_news, g_news = await asyncio.gather(
+        fetch_yahoo_news(ticker),
+        fetch_google_news(ticker)
+    )
+    
+    combined = y_news + g_news
+    
+    deduped = []
+    seen = []
+    for item in combined:
+        title_lower = item["title"].lower()
+        is_dup = any(title_lower in s or s in title_lower for s in seen)
+        if not is_dup:
+            seen.append(title_lower)
+            deduped.append(item)
+            
+    deduped.sort(key=lambda x: x["date"], reverse=True)
     
     impact_keywords = [
         "earnings", "revenue", "profit", "loss", "merger", "acquisition",
@@ -94,29 +199,82 @@ async def get_news(ticker: str):
     ]
 
     articles = []
-    for item in news_items:
-        pub_ts = item.get("providerPublishTime", 0)
-        if pub_ts < cutoff_ts:
-            continue
-
-        title = item.get("title", "")
+    for d in deduped[:20]:
+        title = d["title"]
+        combined_text = title.lower()
+        is_impactful = any(kw in combined_text for kw in impact_keywords)
         
-        combined = title.lower()
-        is_impactful = any(kw in combined for kw in impact_keywords)
-        
-        pub_date = datetime.utcfromtimestamp(pub_ts).strftime("%a, %d %b %Y %H:%M:%S GMT")
-
         articles.append({
             "title": title,
-            "link": item.get("link", ""),
-            "pubDate": pub_date,
-            "publisher": item.get("publisher", ""),
-            "description": title, # fallback to title since yfinance news dict doesn't expose description
+            "link": d["link"],
+            "pubDate": d["date"].strftime("%a, %d %b %Y %H:%M:%S GMT"),
+            "publisher": d["publisher"],
+            "description": title,
             "isImpactful": is_impactful,
         })
+        
+    return {"articles": articles}
 
-    return {"articles": articles[:20]}
+# ── Market Movers ──────────────────────────────────────────────────────
 
+def get_market_movers_data():
+    all_tickers = INDIA_WATCHLIST + US_WATCHLIST
+    data = yf.download(all_tickers, period="1y", group_by="ticker", auto_adjust=False, prepost=False, threads=True)
+    
+    india_res = []
+    us_res = []
+    
+    def process_watchlist(watchlist, res_list, default_curr):
+        for t in watchlist:
+            try:
+                t_data = data[t] if len(all_tickers) > 1 else data
+                t_data = t_data.dropna(subset=['Close'])
+                if len(t_data) < 2:
+                    continue
+                    
+                first_close = float(t_data['Close'].iloc[0])
+                last_close = float(t_data['Close'].iloc[-1])
+                ret_1y = ((last_close - first_close) / first_close) * 100
+                
+                info = yf.Ticker(t).fast_info
+                curr = info.get("currency", default_curr)
+                
+                name = t.split(".")[0]
+                
+                res_list.append({
+                    "symbol": t,
+                    "name": name,
+                    "return1y": round(ret_1y, 2),
+                    "price": round(last_close, 2),
+                    "currency": curr
+                })
+            except Exception:
+                pass
+
+    process_watchlist(INDIA_WATCHLIST, india_res, "INR")
+    process_watchlist(US_WATCHLIST, us_res, "USD")
+            
+    india_res.sort(key=lambda x: x["return1y"], reverse=True)
+    us_res.sort(key=lambda x: x["return1y"], reverse=True)
+    
+    return {
+        "india": india_res[:10],
+        "us": us_res[:10],
+        "cachedAt": datetime.now(timezone.utc).isoformat()
+    }
+
+@app.get("/api/market-movers")
+async def get_market_movers():
+    now = datetime.now(timezone.utc)
+    cached_ts = _market_movers_cache["timestamp"]
+    if cached_ts and (now - cached_ts) < timedelta(hours=24):
+        return _market_movers_cache["data"]
+        
+    data = await asyncio.to_thread(get_market_movers_data)
+    _market_movers_cache["data"] = data
+    _market_movers_cache["timestamp"] = now
+    
+    return data
 
 # ── Gemini AI analysis endpoint ────────────────────────────────────────
 
@@ -195,14 +353,12 @@ Include 5-7 factors. Be realistic — use the headlines for sentiment and the nu
     except httpx.TimeoutException:
         raise HTTPException(504, "Gemini request timed out")
 
-
 @app.get("/health")
 async def health():
     return {"status": "ok", "gemini_configured": bool(GEMINI_API_KEY)}
 
 
 # ── Serve the frontend ───────────────────────────────────────────────
-# Explicit file routes — no static/ subfolder needed, works with a flat repo.
 
 @app.get("/")
 async def serve_index():
