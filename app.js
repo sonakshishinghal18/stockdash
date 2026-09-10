@@ -1,4 +1,3 @@
-```javascript
 // ── Design tokens (match CSS) ───────────────────────────────────────
 const COLORS = {
   blue: "#6366F1",
@@ -626,4 +625,3 @@ async function loadTicker(ticker) {
 if (typeof loadTicker === "function") {
   loadTicker(state.ticker);
 }
-```
