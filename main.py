@@ -19,7 +19,9 @@ GEMINI_MODEL = "gemini-3.8-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 ALLOWED_EXCHANGES = {
+    # India
     "NSI", "NSE", "BSE", "BOM",
+    # US  
     "NYQ", "NYSE", "NMS", "NASDAQ", "NGM", "NAS", "PCX", "ASE", "AMEX"
 }
 
@@ -30,6 +32,10 @@ EXCHANGE_LABELS = {
 }
 
 
+
+
+# ── Search ─────────────────────────────────────────────────────────────
+
 @app.get("/api/search")
 async def search_stocks(q: str = Query(..., min_length=1)):
     def _search():
@@ -37,6 +43,7 @@ async def search_stocks(q: str = Query(..., min_length=1)):
             return search(q)
         except Exception:
             return {"quotes": []}
+            
     data = await asyncio.to_thread(_search)
     results = []
     for q_item in data.get("quotes", []):
@@ -50,6 +57,7 @@ async def search_stocks(q: str = Query(..., min_length=1)):
             })
     return {"results": results}
 
+# ── Chart ──────────────────────────────────────────────────────────────
 
 @app.get("/api/chart/{ticker}")
 async def get_chart(ticker: str, interval: str = "1wk", range: str = "1y"):
@@ -59,6 +67,7 @@ async def get_chart(ticker: str, interval: str = "1wk", range: str = "1y"):
             currency = tkr.fast_info.get("currency", "USD")
         except Exception:
             currency = "USD"
+        
         hist = tkr.history(period=range, interval=interval)
         return hist, currency
 
@@ -82,24 +91,33 @@ async def get_chart(ticker: str, interval: str = "1wk", range: str = "1y"):
 
     return {"ticker": ticker, "name": ticker, "currency": currency, "history": history}
 
+# ── News ───────────────────────────────────────────────────────────────
 
 async def fetch_yahoo_news(ticker: str):
     def _get_news():
         return yf.Ticker(ticker).news
+    
     try:
         news_items = await asyncio.to_thread(_get_news)
         cutoff_ts = (datetime.utcnow() - timedelta(days=90)).timestamp()
+        
         parsed = []
         for item in news_items:
             pub_ts = item.get("providerPublishTime", 0)
             if pub_ts < cutoff_ts:
                 continue
+
             dt = datetime.fromtimestamp(pub_ts, tz=timezone.utc) if pub_ts else datetime.now(timezone.utc)
-            parsed.append({"title": item.get("title", ""), "link": item.get("link", ""), "publisher": item.get("publisher", ""), "date": dt})
+            
+            parsed.append({
+                "title": item.get("title", ""),
+                "link": item.get("link", ""),
+                "publisher": item.get("publisher", ""),
+                "date": dt
+            })
         return parsed
     except Exception:
         return []
-
 
 async def fetch_google_news(ticker: str):
     url = f"https://news.google.com/rss/search?q={ticker}+stock&hl=en"
@@ -108,6 +126,7 @@ async def fetch_google_news(ticker: str):
             resp = await client.get(url, follow_redirects=True, timeout=10.0)
             if resp.status_code != 200:
                 return []
+            
             root = ET.fromstring(resp.text)
             parsed = []
             for item in root.findall(".//item"):
@@ -116,6 +135,7 @@ async def fetch_google_news(ticker: str):
                 pubDate_str = item.findtext("pubDate", "")
                 source_elem = item.find("source")
                 publisher = source_elem.text if source_elem is not None else ""
+                
                 dt = datetime.now(timezone.utc)
                 if pubDate_str:
                     try:
@@ -125,39 +145,53 @@ async def fetch_google_news(ticker: str):
                             dt = datetime.fromtimestamp(ts, tz=timezone.utc)
                     except Exception:
                         pass
-                parsed.append({"title": title, "link": link, "publisher": publisher, "date": dt})
+                
+                parsed.append({
+                    "title": title,
+                    "link": link,
+                    "publisher": publisher,
+                    "date": dt
+                })
             return parsed
     except Exception:
         return []
 
-
 @app.get("/api/news/{ticker}")
 async def get_news(ticker: str):
-    y_news, g_news = await asyncio.gather(fetch_yahoo_news(ticker), fetch_google_news(ticker))
+    y_news, g_news = await asyncio.gather(
+        fetch_yahoo_news(ticker),
+        fetch_google_news(ticker)
+    )
+    
     combined = y_news + g_news
+    
     cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    
     deduped = []
     seen = []
     for item in combined:
         if item["date"] < cutoff:
             continue
+            
         title_lower = item["title"].lower()
         is_dup = any(title_lower in s or s in title_lower for s in seen)
         if not is_dup:
             seen.append(title_lower)
             deduped.append(item)
-
+            
     TIER_1 = ["bloomberg", "reuters", "wsj", "wall street journal", "financial times", "cnbc", "economic times", "mint", "business standard", "moneycontrol", "yahoo finance"]
-    def get_tier(pub):
+    
+    def get_tier(pub: str) -> int:
         p = pub.lower()
         if not p: return 2
         for t in TIER_1:
-            if t in p: return 1
+            if t in p:
+                return 1
         return 2
-
+        
     deduped.sort(key=lambda x: (get_tier(x["publisher"]), -x["date"].timestamp()))
     deduped = deduped[:8]
-
+    
     impact_keywords = [
         "earnings", "revenue", "profit", "loss", "merger", "acquisition",
         "buyback", "dividend", "surge", "plunge", "crash", "rally", "upgrade",
@@ -168,15 +202,22 @@ async def get_news(ticker: str):
     articles = []
     for d in deduped[:20]:
         title = d["title"]
-        is_impactful = any(kw in title.lower() for kw in impact_keywords)
+        combined_text = title.lower()
+        is_impactful = any(kw in combined_text for kw in impact_keywords)
+        
         articles.append({
-            "title": title, "link": d["link"],
+            "title": title,
+            "link": d["link"],
             "pubDate": d["date"].strftime("%a, %d %b %Y %H:%M:%S GMT"),
-            "publisher": d["publisher"], "description": title,
+            "publisher": d["publisher"],
+            "description": title,
             "isImpactful": is_impactful,
         })
+        
     return {"articles": articles}
 
+
+# ── Gemini AI analysis endpoint ────────────────────────────────────────
 
 class AnalyzeRequest(BaseModel):
     ticker: str
@@ -223,21 +264,27 @@ Include 5-7 factors. Be realistic — use the headlines for sentiment and the nu
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2048, "responseMimeType": "application/json"},
+        "generationConfig": {
+            "temperature": 0.4, 
+            "maxOutputTokens": 2048,
+            "responseMimeType": "application/json"
+        },
     }
 
     try:
         async with httpx.AsyncClient() as client:
             r = await client.post(f"{GEMINI_URL}?key={GEMINI_API_KEY}", json=payload, timeout=30)
+        
         if r.status_code == 404:
-            raise HTTPException(502, f"Gemini model not found: {GEMINI_MODEL}")
-        if r.status_code in (400, 403):
-            raise HTTPException(502, f"Gemini API key issue. Code: {r.status_code}")
+            raise HTTPException(502, f"Gemini Model not found. Check if {GEMINI_MODEL} is correct.")
+        if r.status_code == 403 or r.status_code == 400:
+            raise HTTPException(502, f"Gemini API key is invalid or lacks access. Code: {r.status_code}")
         if r.status_code != 200:
-            raise HTTPException(502, f"Gemini API error: {r.status_code}")
+            raise HTTPException(502, f"Gemini API error: {r.status_code} - {r.text}")
 
         data = r.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        
         return json.loads(text)
 
     except json.JSONDecodeError:
@@ -247,11 +294,12 @@ Include 5-7 factors. Be realistic — use the headlines for sentiment and the nu
     except httpx.TimeoutException:
         raise HTTPException(504, "Gemini request timed out")
 
-
 @app.get("/health")
 async def health():
-    return {"status": "ok", "gemini_configured": bool(GEMINI_API_KEY), "model": GEMINI_MODEL}
+    return {"status": "ok", "gemini_configured": bool(GEMINI_API_KEY)}
 
+
+# ── Serve the frontend ───────────────────────────────────────────────
 
 @app.get("/")
 async def serve_index():
