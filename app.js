@@ -129,14 +129,25 @@ const lastDraw = new WeakMap();
 
 function setupCanvas(canvas) {
   const dpr = window.devicePixelRatio || 1;
-  // Temporarily reset inline width to allow parent to shrink/grow natively
-  canvas.style.width = "100%";
-  const cssWidth = canvas.parentElement.clientWidth;
+  const parent = canvas.parentElement;
+
+  // Temporarily clear inline width so parent can report its natural size
+  canvas.style.width = "";
+  canvas.style.height = "";
+
+  // Read the parent's actual content width (minus padding)
+  const rect = parent.getBoundingClientRect();
+  const style = getComputedStyle(parent);
+  const padH = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  const cssWidth = Math.max(100, Math.round(rect.width - padH));
   const cssHeight = parseInt(canvas.getAttribute("height"), 10) || 200;
+
+  // Set explicit pixel dimensions for both display and buffer
   canvas.style.width = cssWidth + "px";
   canvas.style.height = cssHeight + "px";
   canvas.width = Math.max(1, Math.round(cssWidth * dpr));
   canvas.height = Math.max(1, Math.round(cssHeight * dpr));
+
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return { ctx, width: cssWidth, height: cssHeight };
